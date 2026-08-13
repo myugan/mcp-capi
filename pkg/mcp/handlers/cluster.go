@@ -12,12 +12,12 @@ import (
 	"github.com/giantswarm/mcp-capi/pkg/capi"
 )
 
-// createCreateClusterHandler creates a handler for creating new CAPI clusters
+// CreateCreateClusterHandler creates a handler for creating a new cluster
+// from an existing ClusterClass (topology-based).
 func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		arguments := request.GetArguments()
 
-		// Required parameters
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
 			return nil, fmt.Errorf("name argument is required")
@@ -26,83 +26,70 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		if !ok || namespace == "" {
 			return nil, fmt.Errorf("namespace argument is required")
 		}
-		provider, ok := arguments["provider"].(string)
-		if !ok || provider == "" {
-			return nil, fmt.Errorf("provider argument is required")
+		clusterClass, ok := arguments["cluster_class"].(string)
+		if !ok || clusterClass == "" {
+			return nil, fmt.Errorf("cluster_class argument is required")
+		}
+		kubernetesVersion, ok := arguments["kubernetes_version"].(string)
+		if !ok || kubernetesVersion == "" {
+			return nil, fmt.Errorf("kubernetes_version argument is required")
 		}
 
-		// Validate provider
-		validProviders := []string{"aws", "azure", "gcp", "vsphere"}
-		isValidProvider := false
-		for _, vp := range validProviders {
-			if provider == vp {
-				isValidProvider = true
-				break
+		controlPlaneReplicas := int32(1)
+		if v, ok := arguments["control_plane_replicas"].(float64); ok {
+			controlPlaneReplicas = int32(v)
+		}
+
+		var machineDeployments []capi.MachineDeploymentSpec
+		if rawMDs, ok := arguments["machine_deployments"].([]interface{}); ok {
+			for _, raw := range rawMDs {
+				m, ok := raw.(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("each machine_deployments entry must be an object")
+				}
+				class, _ := m["class"].(string)
+				mdName, _ := m["name"].(string)
+				if class == "" || mdName == "" {
+					return nil, fmt.Errorf("each machine_deployments entry requires class and name")
+				}
+				replicas := int32(0)
+				if r, ok := m["replicas"].(float64); ok {
+					replicas = int32(r)
+				}
+				machineDeployments = append(machineDeployments, capi.MachineDeploymentSpec{
+					Class:    class,
+					Name:     mdName,
+					Replicas: replicas,
+				})
 			}
 		}
-		if !isValidProvider {
-			return nil, fmt.Errorf("invalid provider %s. Must be one of: %s", provider, strings.Join(validProviders, ", "))
+
+		variables := map[string]interface{}{}
+		if rawVars, ok := arguments["variables"].(map[string]interface{}); ok {
+			variables = rawVars
 		}
 
-		// Optional parameters with defaults
-		kubernetesVersion, _ := arguments["kubernetes_version"].(string)
-		if kubernetesVersion == "" {
-			kubernetesVersion = "v1.29.0"
-		}
-
-		controlPlaneCount := int32(3)
-		if cpCount, ok := arguments["control_plane_count"].(float64); ok {
-			controlPlaneCount = int32(cpCount)
-		}
-
-		workerCount := int32(3)
-		if wCount, ok := arguments["worker_count"].(float64); ok {
-			workerCount = int32(wCount)
-		}
-
-		region, _ := arguments["region"].(string)
-		instanceType, _ := arguments["instance_type"].(string)
-
-		// Create cluster options
 		opts := capi.CreateClusterOptions{
-			Name:              name,
-			Namespace:         namespace,
-			InfraProvider:     provider,
-			KubernetesVersion: kubernetesVersion,
-			ControlPlaneCount: controlPlaneCount,
-			WorkerCount:       workerCount,
-			Region:            region,
-			InstanceType:      instanceType,
+			Name:                 name,
+			Namespace:            namespace,
+			ClusterClass:         clusterClass,
+			KubernetesVersion:    kubernetesVersion,
+			ControlPlaneReplicas: controlPlaneReplicas,
+			MachineDeployments:   machineDeployments,
+			Variables:            variables,
 		}
 
-		// Create the cluster
 		cluster, err := serverCtx.CAPIClient.CreateCluster(ctx, opts)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cluster: %w", err)
 		}
 
 		var content strings.Builder
-		fmt.Fprintf(&content, "✅ Cluster '%s' creation initiated successfully!\n\n", name)
-		content.WriteString("Cluster Details:\n")
-		fmt.Fprintf(&content, "  Name: %s\n", cluster.Name)
-		fmt.Fprintf(&content, "  Namespace: %s\n", cluster.Namespace)
-		fmt.Fprintf(&content, "  Provider: %s\n", provider)
-		fmt.Fprintf(&content, "  Kubernetes Version: %s\n", kubernetesVersion)
-		fmt.Fprintf(&content, "  Control Plane Nodes: %d\n", controlPlaneCount)
-		fmt.Fprintf(&content, "  Worker Nodes: %d\n", workerCount)
-		if region != "" {
-			fmt.Fprintf(&content, "  Region: %s\n", region)
-		}
-		if instanceType != "" {
-			fmt.Fprintf(&content, "  Instance Type: %s\n", instanceType)
-		}
-		content.WriteString("\n⚠️  Note: This is a basic implementation that creates only the Cluster resource.\n")
-		content.WriteString("In a production setup, you would need to:\n")
-		content.WriteString("1. Create the infrastructure-specific cluster resource (e.g., AWSCluster)\n")
-		content.WriteString("2. Create the control plane (e.g., KubeadmControlPlane)\n")
-		content.WriteString("3. Create machine deployments for worker nodes\n")
-		content.WriteString("4. Configure networking, storage, and other cluster settings\n\n")
-		content.WriteString("Monitor cluster creation with: capi_cluster_status\n")
+		fmt.Fprintf(&content, "Cluster %s/%s created from ClusterClass %s.\n", cluster.Namespace, cluster.Name, clusterClass)
+		fmt.Fprintf(&content, "  Kubernetes version: %s\n", kubernetesVersion)
+		fmt.Fprintf(&content, "  Control plane replicas: %d\n", controlPlaneReplicas)
+		fmt.Fprintf(&content, "  Machine deployments: %d\n", len(machineDeployments))
+		content.WriteString("\nUse capi_cluster_status to monitor provisioning.\n")
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
@@ -426,6 +413,54 @@ func CreateScaleClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc 
 				mcp.TextContent{
 					Type: textContentType,
 					Text: fmt.Sprintf("Cluster %s/%s scaled successfully", namespace, name),
+				},
+			},
+		}, nil
+	}
+}
+
+// CreateKubectlHandler creates a handler that dynamically resolves a workload
+// cluster's kubeconfig and runs an arbitrary kubectl invocation directly
+// against that cluster's own API server.
+func CreateKubectlHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		arguments := request.GetArguments()
+		namespace, ok := arguments["namespace"].(string)
+		if !ok || namespace == "" {
+			return nil, fmt.Errorf("namespace argument is required")
+		}
+		clusterName, ok := arguments["cluster_name"].(string)
+		if !ok || clusterName == "" {
+			return nil, fmt.Errorf("cluster_name argument is required")
+		}
+
+		rawArgs, ok := arguments["args"].([]interface{})
+		if !ok || len(rawArgs) == 0 {
+			return nil, fmt.Errorf("args argument is required and must be a non-empty array of strings")
+		}
+		args := make([]string, 0, len(rawArgs))
+		for _, a := range rawArgs {
+			s, ok := a.(string)
+			if !ok {
+				return nil, fmt.Errorf("all elements of args must be strings")
+			}
+			args = append(args, s)
+		}
+
+		output, err := serverCtx.CAPIClient.ExecKubectl(ctx, namespace, clusterName, args)
+		if err != nil {
+			return nil, fmt.Errorf("kubectl execution failed: %w\noutput:\n%s", err, output)
+		}
+
+		var content strings.Builder
+		fmt.Fprintf(&content, "kubectl %s against cluster %s:\n\n", strings.Join(args, " "), clusterName)
+		content.WriteString(output)
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				mcp.TextContent{
+					Type: "text",
+					Text: content.String(),
 				},
 			},
 		}, nil

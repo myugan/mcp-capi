@@ -2,13 +2,17 @@ package capi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -321,6 +325,14 @@ func (c *Client) GetMachineDeployment(ctx context.Context, namespace, name strin
 
 // GetKubeconfig retrieves the kubeconfig for a workload cluster
 func (c *Client) GetKubeconfig(ctx context.Context, namespace, clusterName string) (string, error) {
+	// Verify a real Cluster resource exists before trusting the guessed secret
+	// name below. Without this, any caller could pass an arbitrary name and
+	// retrieve whatever secret happens to exist at {name}-kubeconfig, which is
+	// not necessarily a CAPI-managed workload cluster.
+	if _, err := c.GetCluster(ctx, namespace, clusterName); err != nil {
+		return "", fmt.Errorf("refusing to resolve kubeconfig: no such cluster %s/%s: %w", namespace, clusterName, err)
+	}
+
 	// The kubeconfig is typically stored in a secret named {cluster-name}-kubeconfig
 	secretName := fmt.Sprintf("%s-kubeconfig", clusterName)
 
@@ -345,6 +357,90 @@ func (c *Client) GetKubeconfig(ctx context.Context, namespace, clusterName strin
 	}
 
 	return string(kubeconfigData), nil
+}
+
+// kubectlBinaryPath is the absolute path to the kubectl binary baked into the
+// container image. An absolute path is used rather than relying on $PATH
+// lookup, since the runtime image has no shell/environment to speak of.
+const kubectlBinaryPath = "/usr/local/bin/kubectl"
+
+// blockedKubectlFlags are flags that would let a caller override the
+// resolved workload-cluster target or otherwise escape it (pointing kubectl
+// at a different context, server, or set of credentials than the one this
+// function resolved). Any argument matching one of these is rejected before
+// kubectl ever runs.
+var blockedKubectlFlags = []string{
+	"--kubeconfig", "--context", "--cluster", "--user",
+	"--server", "-s", "--token", "--as", "--as-group", "--as-uid",
+	"--client-certificate", "--client-key", "--certificate-authority",
+}
+
+// ExecKubectl dynamically resolves the given workload cluster's kubeconfig
+// and runs a real kubectl invocation directly against that cluster's own API
+// server. It never falls back to any default/in-cluster kubeconfig: if
+// resolution fails, if any argument attempts to redirect kubectl at a
+// different target, or if the resolved server host matches the management
+// cluster's own API host, the call is refused before kubectl ever runs.
+func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string, args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("at least one kubectl argument is required")
+	}
+
+	for _, a := range args {
+		for _, blocked := range blockedKubectlFlags {
+			if a == blocked || strings.HasPrefix(a, blocked+"=") {
+				return "", fmt.Errorf("argument %q is not allowed: it would override the resolved target cluster", a)
+			}
+		}
+	}
+
+	kubeconfig, err := c.GetKubeconfig(ctx, namespace, clusterName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get kubeconfig for cluster %s: %w", clusterName, err)
+	}
+
+	workloadConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(kubeconfig))
+	if err != nil {
+		return "", fmt.Errorf("failed to parse kubeconfig for cluster %s: %w", clusterName, err)
+	}
+
+	// Defense in depth: even though GetKubeconfig already validated a real
+	// Cluster resource exists, refuse to proceed if the resolved server
+	// somehow matches the management cluster's own API host.
+	if c.config != nil && c.config.Host != "" {
+		mgmtHost, mgmtErr := url.Parse(c.config.Host)
+		workloadHost, workloadErr := url.Parse(workloadConfig.Host)
+		if mgmtErr == nil && workloadErr == nil && mgmtHost.Hostname() != "" &&
+			mgmtHost.Hostname() == workloadHost.Hostname() {
+			return "", fmt.Errorf("refusing to run kubectl: resolved target for cluster %s matches the management cluster's own API host", clusterName)
+		}
+	}
+
+	// os.CreateTemp creates the file with mode 0600, so the kubeconfig
+	// (bearer tokens/client certs included) is never world- or group-readable.
+	tmpFile, err := os.CreateTemp("", "capi-kubeconfig-*.yaml")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp kubeconfig file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.WriteString(kubeconfig); err != nil {
+		tmpFile.Close()
+		return "", fmt.Errorf("failed to write temp kubeconfig file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close temp kubeconfig file: %w", err)
+	}
+
+	kubectlArgs := append([]string{"--kubeconfig", tmpPath}, args...)
+	cmd := exec.CommandContext(ctx, kubectlBinaryPath, kubectlArgs...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("kubectl command failed for cluster %s: %w", clusterName, err)
+	}
+
+	return string(output), nil
 }
 
 // PauseCluster pauses reconciliation for a cluster by adding the cluster.x-k8s.io/paused annotation
@@ -416,55 +512,90 @@ func (c *Client) DeleteCluster(ctx context.Context, namespace, name string) erro
 	return nil
 }
 
-// CreateClusterOptions contains options for creating a new cluster
-type CreateClusterOptions struct {
-	Name              string
-	Namespace         string
-	InfraProvider     string
-	KubernetesVersion string
-	ControlPlaneCount int32
-	WorkerCount       int32
-	Region            string
-	InstanceType      string
+// MachineDeploymentSpec describes one worker machine deployment topology to
+// include when creating a cluster from a ClusterClass.
+type MachineDeploymentSpec struct {
+	// Class is the MachineDeploymentClass name defined in the ClusterClass.
+	Class string
+	// Name is the unique identifier for this MachineDeploymentTopology.
+	Name string
+	// Replicas is the number of worker nodes for this machine deployment.
+	Replicas int32
 }
 
-// CreateCluster creates a new CAPI cluster with basic configuration
-func (c *Client) CreateCluster(ctx context.Context, opts CreateClusterOptions) (*clusterv1.Cluster, error) {
-	// For now, we'll create a basic cluster object
-	// In a real implementation, this would create all the necessary resources
-	// (Cluster, KubeadmControlPlane, MachineDeployment, etc.)
+// CreateClusterOptions contains options for creating a new cluster from an
+// existing ClusterClass, via spec.topology -- the same mechanism used by
+// every ClusterClass-managed cluster in this environment (e.g. timbernetes).
+type CreateClusterOptions struct {
+	Name                 string
+	Namespace            string
+	ClusterClass         string
+	KubernetesVersion    string
+	ControlPlaneReplicas int32
+	MachineDeployments   []MachineDeploymentSpec
+	// Variables are passed through as the Cluster's topology variables.
+	// Their names and shapes must match what the referenced ClusterClass
+	// defines; the API server validates them against the ClusterClass's
+	// variable schemas on create.
+	Variables map[string]interface{}
+}
 
+// CreateCluster creates a new CAPI cluster from an existing ClusterClass. It
+// does not create the ClusterClass itself, nor any of the underlying control
+// plane/infrastructure objects -- those are generated by CAPI's topology
+// controller from the referenced ClusterClass.
+func (c *Client) CreateCluster(ctx context.Context, opts CreateClusterOptions) (*clusterv1.Cluster, error) {
+	// Verify the ClusterClass actually exists before submitting, for a clear
+	// error instead of a cryptic admission failure.
+	clusterClass := &clusterv1.ClusterClass{}
+	ccKey := client.ObjectKey{Namespace: opts.Namespace, Name: opts.ClusterClass}
+	if err := c.ctrlClient.Get(ctx, ccKey, clusterClass); err != nil {
+		return nil, fmt.Errorf("cluster class %s/%s not found: %w", opts.Namespace, opts.ClusterClass, err)
+	}
+
+	variables := make([]clusterv1.ClusterVariable, 0, len(opts.Variables))
+	for name, value := range opts.Variables {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal value for variable %s: %w", name, err)
+		}
+		variables = append(variables, clusterv1.ClusterVariable{
+			Name:  name,
+			Value: apiextensionsv1.JSON{Raw: raw},
+		})
+	}
+
+	machineDeployments := make([]clusterv1.MachineDeploymentTopology, 0, len(opts.MachineDeployments))
+	for _, md := range opts.MachineDeployments {
+		replicas := md.Replicas
+		machineDeployments = append(machineDeployments, clusterv1.MachineDeploymentTopology{
+			Class:    md.Class,
+			Name:     md.Name,
+			Replicas: &replicas,
+		})
+	}
+
+	controlPlaneReplicas := opts.ControlPlaneReplicas
 	cluster := &clusterv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      opts.Name,
 			Namespace: opts.Namespace,
-			Labels: map[string]string{
-				"cluster.x-k8s.io/provider": opts.InfraProvider,
-			},
 		},
 		Spec: clusterv1.ClusterSpec{
-			ClusterNetwork: &clusterv1.ClusterNetwork{
-				Pods: &clusterv1.NetworkRanges{
-					CIDRBlocks: []string{"192.168.0.0/16"},
+			Topology: &clusterv1.Topology{
+				Class:   opts.ClusterClass,
+				Version: opts.KubernetesVersion,
+				ControlPlane: clusterv1.ControlPlaneTopology{
+					Replicas: &controlPlaneReplicas,
 				},
-				Services: &clusterv1.NetworkRanges{
-					CIDRBlocks: []string{"10.96.0.0/12"},
+				Workers: &clusterv1.WorkersTopology{
+					MachineDeployments: machineDeployments,
 				},
-			},
-			ControlPlaneRef: &corev1.ObjectReference{
-				APIVersion: "controlplane.cluster.x-k8s.io/v1beta1",
-				Kind:       "KubeadmControlPlane",
-				Name:       opts.Name + "-control-plane",
-			},
-			InfrastructureRef: &corev1.ObjectReference{
-				APIVersion: getInfraAPIVersion(opts.InfraProvider),
-				Kind:       getInfraKind(opts.InfraProvider),
-				Name:       opts.Name,
+				Variables: variables,
 			},
 		},
 	}
 
-	// Create the cluster
 	if err := c.ctrlClient.Create(ctx, cluster); err != nil {
 		return nil, fmt.Errorf("failed to create cluster: %w", err)
 	}
@@ -693,31 +824,6 @@ func (c *Client) BackupCluster(ctx context.Context, opts BackupClusterOptions) (
 	backup.WriteString("# Example: velero backup create cluster-backup --include-namespaces=<namespace>\n")
 
 	return backup.String(), nil
-}
-
-// Helper functions to map provider to API versions and kinds
-const infraAPIV1Beta1 = "infrastructure.cluster.x-k8s.io/v1beta1"
-
-func getInfraAPIVersion(provider string) string {
-	if provider == "aws" {
-		return "infrastructure.cluster.x-k8s.io/v1beta2"
-	}
-	return infraAPIV1Beta1
-}
-
-func getInfraKind(provider string) string {
-	switch provider {
-	case "aws":
-		return "AWSCluster"
-	case "azure":
-		return "AzureCluster"
-	case "gcp":
-		return "GCPCluster"
-	case "vsphere":
-		return "VSphereCluster"
-	default:
-		return "Cluster"
-	}
 }
 
 // ClusterHealthStatus represents the health status of a cluster

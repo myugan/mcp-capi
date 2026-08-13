@@ -12,11 +12,14 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
     -o mcp-capi .
 
 FROM gsoci.azurecr.io/giantswarm/alpine:3.20.3-giantswarm AS certs
+FROM bitnami/kubectl:latest AS kubectl
 FROM scratch
 
 COPY --from=certs /etc/passwd /etc/passwd
 COPY --from=certs /etc/group /etc/group
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=certs --chmod=1777 /tmp /tmp
+COPY --from=kubectl --chmod=0755 /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/kubectl
 
 COPY --from=builder /app/mcp-capi /mcp-capi
 USER giantswarm

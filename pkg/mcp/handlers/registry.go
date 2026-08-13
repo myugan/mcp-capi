@@ -49,15 +49,17 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 	tools = append(tools, ToolRegistration{
 		Tool: mcp.NewTool(
 			"capi_create_cluster",
-			mcp.WithDescription("Create a new CAPI cluster (basic implementation)"),
+			mcp.WithDescription("Create a new CAPI cluster from an existing ClusterClass (topology-based). Does not create the ClusterClass itself -- check existing ClusterClasses first (e.g. via capi_get_cluster on a similar existing cluster) to find one to use and the variable values it requires."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Name of the cluster")),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace for the cluster")),
-			mcp.WithString("provider", mcp.Required(), mcp.Description("Infrastructure provider (aws, azure, gcp, vsphere)")),
-			mcp.WithString("kubernetes_version", mcp.Description("Kubernetes version (default: v1.29.0)")),
-			mcp.WithNumber("control_plane_count", mcp.Description("Number of control plane nodes (default: 3)")),
-			mcp.WithNumber("worker_count", mcp.Description("Number of worker nodes (default: 3)")),
-			mcp.WithString("region", mcp.Description("Cloud provider region")),
-			mcp.WithString("instance_type", mcp.Description("Instance type for nodes")),
+			mcp.WithString("cluster_class", mcp.Required(), mcp.Description("Name of the ClusterClass to instantiate (must already exist in the same namespace)")),
+			mcp.WithString("kubernetes_version", mcp.Required(), mcp.Description("Kubernetes version for the cluster, e.g. v1.35.0")),
+			mcp.WithNumber("control_plane_replicas", mcp.Description("Number of control plane replicas (default: 1)")),
+			mcp.WithArray("machine_deployments",
+				mcp.Description("Worker machine deployments, e.g. [{\"class\": \"default-worker\", \"name\": \"md-0\", \"replicas\": 2}]"),
+				mcp.Items(map[string]any{"type": "object"}),
+			),
+			mcp.WithObject("variables", mcp.Description("Variable values required by the ClusterClass -- names and shapes must match the ClusterClass's variable schemas")),
 		),
 		Handler: CreateCreateClusterHandler(serverCtx),
 	})
@@ -130,6 +132,18 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			mcp.WithString("name", mcp.Required(), mcp.Description("Name of the cluster")),
 		),
 		Handler: CreateGetKubeconfigHandler(serverCtx),
+	})
+
+	// capi_kubectl
+	tools = append(tools, ToolRegistration{
+		Tool: mcp.NewTool(
+			"capi_kubectl",
+			mcp.WithDescription("Run an arbitrary kubectl command directly against a CAPI-managed workload cluster's own API server, by dynamically resolving that cluster's kubeconfig. Cannot target the management cluster. Cannot override the resolved kubeconfig/context/server/credentials via args."),
+			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the Cluster resource on the management cluster")),
+			mcp.WithString("cluster_name", mcp.Required(), mcp.Description("Name of the workload cluster to run kubectl against")),
+			mcp.WithArray("args", mcp.Required(), mcp.Description("kubectl arguments, e.g. [\"get\", \"pods\", \"-A\"] or [\"auth\", \"can-i\", \"--list\"]"), mcp.Items(map[string]any{"type": "string"})),
+		),
+		Handler: CreateKubectlHandler(serverCtx),
 	})
 
 	// capi_pause_cluster

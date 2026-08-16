@@ -368,6 +368,10 @@ func (c *Client) GetKubeconfig(ctx context.Context, namespace, clusterName strin
 // lookup, since the runtime image has no shell/environment to speak of.
 const kubectlBinaryPath = "/usr/local/bin/kubectl"
 
+// helmBinaryPath is the absolute path to the helm binary baked into the
+// container image, for the same reason as kubectlBinaryPath above.
+const helmBinaryPath = "/usr/local/bin/helm"
+
 // blockedKubectlFlags are flags that would let a caller override the
 // resolved workload-cluster target or otherwise escape it (pointing kubectl
 // at a different context, server, or set of credentials than the one this
@@ -377,6 +381,68 @@ var blockedKubectlFlags = []string{
 	"--kubeconfig", "--context", "--cluster", "--user",
 	"--server", "-s", "--token", "--as", "--as-group", "--as-uid",
 	"--client-certificate", "--client-key", "--certificate-authority",
+}
+
+// blockedHelmFlags are the Helm equivalents of blockedKubectlFlags: flags
+// that would let a caller redirect helm at a different kube-apiserver,
+// context, or set of credentials than the resolved workload cluster. Any
+// argument matching one of these is rejected before helm ever runs.
+var blockedHelmFlags = []string{
+	"--kubeconfig", "--kube-context", "--kube-apiserver", "--kube-token",
+	"--kube-as-user", "--kube-as-group", "--kube-ca-file",
+	"--kube-insecure-skip-tls-verify", "--kube-tls-server-name",
+}
+
+// resolveWorkloadKubeconfigFile dynamically resolves the given workload
+// cluster's kubeconfig and writes it to a private temp file for a CLI
+// subprocess (kubectl/helm) to use via --kubeconfig. It never falls back to
+// any default/in-cluster kubeconfig: if resolution fails, or if the resolved
+// server host matches the management cluster's own API host, the call is
+// refused. The returned cleanup func removes the temp file and must always
+// be called.
+func (c *Client) resolveWorkloadKubeconfigFile(ctx context.Context, namespace, clusterName string) (path string, cleanup func(), err error) {
+	kubeconfig, err := c.GetKubeconfig(ctx, namespace, clusterName)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to get kubeconfig for cluster %s: %w", clusterName, err)
+	}
+
+	workloadConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(kubeconfig))
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to parse kubeconfig for cluster %s: %w", clusterName, err)
+	}
+
+	// Defense in depth: even though GetKubeconfig already validated a real
+	// Cluster resource exists, refuse to proceed if the resolved server
+	// somehow matches the management cluster's own API host.
+	if c.config != nil && c.config.Host != "" {
+		mgmtHost, mgmtErr := url.Parse(c.config.Host)
+		workloadHost, workloadErr := url.Parse(workloadConfig.Host)
+		if mgmtErr == nil && workloadErr == nil && mgmtHost.Hostname() != "" &&
+			mgmtHost.Hostname() == workloadHost.Hostname() {
+			return "", nil, fmt.Errorf("refusing to resolve kubeconfig: resolved target for cluster %s matches the management cluster's own API host", clusterName)
+		}
+	}
+
+	// os.CreateTemp creates the file with mode 0600, so the kubeconfig
+	// (bearer tokens/client certs included) is never world- or group-readable.
+	tmpFile, err := os.CreateTemp("", "capi-kubeconfig-*.yaml")
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create temp kubeconfig file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	cleanup = func() { os.Remove(tmpPath) }
+
+	if _, err := tmpFile.WriteString(kubeconfig); err != nil {
+		tmpFile.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("failed to write temp kubeconfig file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("failed to close temp kubeconfig file: %w", err)
+	}
+
+	return tmpPath, cleanup, nil
 }
 
 // ExecKubectl dynamically resolves the given workload cluster's kubeconfig
@@ -398,50 +464,53 @@ func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string,
 		}
 	}
 
-	kubeconfig, err := c.GetKubeconfig(ctx, namespace, clusterName)
+	tmpPath, cleanup, err := c.resolveWorkloadKubeconfigFile(ctx, namespace, clusterName)
 	if err != nil {
-		return "", fmt.Errorf("failed to get kubeconfig for cluster %s: %w", clusterName, err)
+		return "", err
 	}
-
-	workloadConfig, err := clientcmd.RESTConfigFromKubeConfig([]byte(kubeconfig))
-	if err != nil {
-		return "", fmt.Errorf("failed to parse kubeconfig for cluster %s: %w", clusterName, err)
-	}
-
-	// Defense in depth: even though GetKubeconfig already validated a real
-	// Cluster resource exists, refuse to proceed if the resolved server
-	// somehow matches the management cluster's own API host.
-	if c.config != nil && c.config.Host != "" {
-		mgmtHost, mgmtErr := url.Parse(c.config.Host)
-		workloadHost, workloadErr := url.Parse(workloadConfig.Host)
-		if mgmtErr == nil && workloadErr == nil && mgmtHost.Hostname() != "" &&
-			mgmtHost.Hostname() == workloadHost.Hostname() {
-			return "", fmt.Errorf("refusing to run kubectl: resolved target for cluster %s matches the management cluster's own API host", clusterName)
-		}
-	}
-
-	// os.CreateTemp creates the file with mode 0600, so the kubeconfig
-	// (bearer tokens/client certs included) is never world- or group-readable.
-	tmpFile, err := os.CreateTemp("", "capi-kubeconfig-*.yaml")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp kubeconfig file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := tmpFile.WriteString(kubeconfig); err != nil {
-		tmpFile.Close()
-		return "", fmt.Errorf("failed to write temp kubeconfig file: %w", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return "", fmt.Errorf("failed to close temp kubeconfig file: %w", err)
-	}
+	defer cleanup()
 
 	kubectlArgs := append([]string{"--kubeconfig", tmpPath}, args...)
 	cmd := exec.CommandContext(ctx, kubectlBinaryPath, kubectlArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("kubectl command failed for cluster %s: %w", clusterName, err)
+	}
+
+	return string(output), nil
+}
+
+// ExecHelm dynamically resolves the given workload cluster's kubeconfig and
+// runs a real helm invocation directly against that cluster's own API
+// server -- the same trust model as ExecKubectl. It never falls back to any
+// default/in-cluster kubeconfig: if resolution fails, if any argument
+// attempts to redirect helm at a different target, or if the resolved
+// server host matches the management cluster's own API host, the call is
+// refused before helm ever runs.
+func (c *Client) ExecHelm(ctx context.Context, namespace, clusterName string, args []string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("at least one helm argument is required")
+	}
+
+	for _, a := range args {
+		for _, blocked := range blockedHelmFlags {
+			if a == blocked || strings.HasPrefix(a, blocked+"=") {
+				return "", fmt.Errorf("argument %q is not allowed: it would override the resolved target cluster", a)
+			}
+		}
+	}
+
+	tmpPath, cleanup, err := c.resolveWorkloadKubeconfigFile(ctx, namespace, clusterName)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+
+	helmArgs := append([]string{"--kubeconfig", tmpPath}, args...)
+	cmd := exec.CommandContext(ctx, helmBinaryPath, helmArgs...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("helm command failed for cluster %s: %w", clusterName, err)
 	}
 
 	return string(output), nil

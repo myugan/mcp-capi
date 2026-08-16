@@ -506,6 +506,54 @@ func CreateKubectlHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 	}
 }
 
+// CreateHelmHandler creates a handler that dynamically resolves a workload
+// cluster's kubeconfig and runs an arbitrary helm invocation directly
+// against that cluster's own API server.
+func CreateHelmHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		arguments := request.GetArguments()
+		namespace, ok := arguments["namespace"].(string)
+		if !ok || namespace == "" {
+			return nil, fmt.Errorf("namespace argument is required")
+		}
+		clusterName, ok := arguments["cluster_name"].(string)
+		if !ok || clusterName == "" {
+			return nil, fmt.Errorf("cluster_name argument is required")
+		}
+
+		rawArgs, ok := arguments["args"].([]interface{})
+		if !ok || len(rawArgs) == 0 {
+			return nil, fmt.Errorf("args argument is required and must be a non-empty array of strings")
+		}
+		args := make([]string, 0, len(rawArgs))
+		for _, a := range rawArgs {
+			s, ok := a.(string)
+			if !ok {
+				return nil, fmt.Errorf("all elements of args must be strings")
+			}
+			args = append(args, s)
+		}
+
+		output, err := serverCtx.CAPIClient.ExecHelm(ctx, namespace, clusterName, args)
+		if err != nil {
+			return nil, fmt.Errorf("helm execution failed: %w\noutput:\n%s", err, output)
+		}
+
+		var content strings.Builder
+		fmt.Fprintf(&content, "helm %s against cluster %s:\n\n", strings.Join(args, " "), clusterName)
+		content.WriteString(output)
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				mcp.TextContent{
+					Type: "text",
+					Text: content.String(),
+				},
+			},
+		}, nil
+	}
+}
+
 // createGetKubeconfigHandler creates a handler for retrieving cluster kubeconfig
 func CreateGetKubeconfigHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {

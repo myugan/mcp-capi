@@ -154,6 +154,18 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 		Handler: CreateKubectlHandler(serverCtx),
 	})
 
+	// capi_helm
+	tools = append(tools, ToolRegistration{
+		Tool: mcp.NewTool(
+			"capi_helm",
+			mcp.WithDescription("Run an arbitrary helm command directly against a CAPI-managed workload cluster's own API server, by dynamically resolving that cluster's kubeconfig. Cannot target the management cluster. Cannot override the resolved kubeconfig/context/server/credentials via args."),
+			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the Cluster resource on the management cluster")),
+			mcp.WithString("cluster_name", mcp.Required(), mcp.Description("Name of the workload cluster to run helm against")),
+			mcp.WithArray("args", mcp.Required(), mcp.Description("helm arguments, e.g. [\"list\", \"-A\"] or [\"install\", \"cilium\", \"cilium/cilium\", \"--namespace\", \"kube-system\", \"--values\", \"-\"]"), mcp.Items(map[string]any{"type": "string"})),
+		),
+		Handler: CreateHelmHandler(serverCtx),
+	})
+
 	// capi_pause_cluster
 	tools = append(tools, ToolRegistration{
 		Tool: mcp.NewTool(

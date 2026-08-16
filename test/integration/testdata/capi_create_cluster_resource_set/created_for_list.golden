@@ -1,0 +1,7 @@
+ClusterResourceSet test-clusters/listed-crs created.
+  Strategy: ApplyOnce
+  Cluster selector: map[deploy-cni:true]
+  Resources: 1
+
+Clusters matching the selector will have these resources applied automatically.
+Use capi_update_cluster to add the matching label to an existing Cluster.

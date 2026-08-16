@@ -156,3 +156,25 @@ func (h *Harness) CreateSecret(namespace, name string, data map[string][]byte) *
 	})
 	return h
 }
+
+// CreateConfigMap queues creation of a Kubernetes ConfigMap in the given namespace.
+// The data map contains the configmap's key-value pairs.
+func (h *Harness) CreateConfigMap(namespace, name string, data map[string]string) *Harness {
+	h.t.Helper()
+	h.operations = append(h.operations, &configMapOp{
+		namespace: namespace,
+		name:      name,
+		data:      data,
+	})
+	return h
+}
+
+// CreateClusterClass queues creation of a minimal ClusterClass in the given namespace.
+func (h *Harness) CreateClusterClass(namespace, name string) *Harness {
+	h.t.Helper()
+	h.operations = append(h.operations, &clusterClassOp{
+		namespace: namespace,
+		name:      name,
+	})
+	return h
+}

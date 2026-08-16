@@ -1,0 +1,7 @@
+Cluster test-clusters/timbernetes created from ClusterClass capn-audit.
+  Kubernetes version: v1.35.0
+  Control plane replicas: 1
+  Machine deployments: 0
+  Cluster network: pods=[10.244.0.0/16] services=[10.96.0.0/12] serviceDomain="cluster.local"
+
+Use capi_cluster_status to monitor provisioning.

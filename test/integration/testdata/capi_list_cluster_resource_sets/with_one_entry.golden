@@ -1,0 +1,7 @@
+Found 1 ClusterResourceSets:
+
+ClusterResourceSet: test-clusters/listed-crs
+  Strategy: ApplyOnce
+  Cluster selector: map[deploy-cni:true]
+  Resources: 1
+

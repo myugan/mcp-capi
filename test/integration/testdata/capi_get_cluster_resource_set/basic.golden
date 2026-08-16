@@ -1,0 +1,6 @@
+ClusterResourceSet: test-clusters/got-crs
+Strategy: ApplyOnce
+Cluster selector: map[deploy-cni:true]
+Resources:
+  - ConfigMap/got-manifest
+Observed generation: 0

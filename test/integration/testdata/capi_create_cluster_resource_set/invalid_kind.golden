@@ -1,0 +1,1 @@
+internal error: failed to create cluster resource set: invalid resource kind "Deployment" for "not-supported": must be "Secret" or "ConfigMap"

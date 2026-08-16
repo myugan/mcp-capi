@@ -1,0 +1,7 @@
+Cluster test-clusters/overridden-worker-cluster created from ClusterClass capn-audit.
+  Kubernetes version: v1.35.0
+  Control plane replicas: 1
+  Machine deployments: 2
+    md-0: 1 variable override(s)
+
+Use capi_cluster_status to monitor provisioning.

@@ -1,0 +1,1 @@
+internal error: failed to create cluster resource set: invalid strategy "Sometimes": must be "ApplyOnce" or "Reconcile"

@@ -1,0 +1,7 @@
+ClusterResourceSet test-clusters/flannel created.
+  Strategy: ApplyOnce
+  Cluster selector: map[capn.cluster.x-k8s.io/deploy-kube-flannel:true]
+  Resources: 1
+
+Clusters matching the selector will have these resources applied automatically.
+Use capi_update_cluster to add the matching label to an existing Cluster.

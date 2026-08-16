@@ -29,6 +29,9 @@ func BuildAllTools(serverCtx *ServerContext) ([]ToolRegistration, error) {
 	// Cluster tools
 	tools = append(tools, buildClusterTools(serverCtx)...)
 
+	// ClusterResourceSet (addon) tools
+	tools = append(tools, buildResourceSetTools(serverCtx)...)
+
 	// Machine tools
 	tools = append(tools, buildMachineTools(serverCtx)...)
 
@@ -56,10 +59,15 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			mcp.WithString("kubernetes_version", mcp.Required(), mcp.Description("Kubernetes version for the cluster, e.g. v1.35.0")),
 			mcp.WithNumber("control_plane_replicas", mcp.Description("Number of control plane replicas (default: 1)")),
 			mcp.WithArray("machine_deployments",
-				mcp.Description("Worker machine deployments, e.g. [{\"class\": \"default-worker\", \"name\": \"md-0\", \"replicas\": 2}]"),
+				mcp.Description("Worker machine deployments, e.g. [{\"class\": \"default-worker\", \"name\": \"md-0\", \"replicas\": 2, "+
+					"\"variables\": {\"instance\": {...}}}]. The optional per-entry \"variables\" object overrides the top-level "+
+					"variables for that MachineDeployment only (e.g. a different instance flavor/image for workers)."),
 				mcp.Items(map[string]any{"type": "object"}),
 			),
 			mcp.WithObject("variables", mcp.Description("Variable values required by the ClusterClass -- names and shapes must match the ClusterClass's variable schemas")),
+			mcp.WithObject("cluster_network", mcp.Description("Sets spec.clusterNetwork. Optional -- ClusterClasses do not set this themselves, so provide it "+
+				"whenever the cluster's CNI/kube-proxy expect specific ranges, e.g. "+
+				"{\"pods\": [\"10.244.0.0/16\"], \"services\": [\"10.96.0.0/12\"], \"service_domain\": \"cluster.local\"}")),
 		),
 		Handler: CreateCreateClusterHandler(serverCtx),
 	})

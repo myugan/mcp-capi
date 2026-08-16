@@ -33,6 +33,7 @@ readonly GITHUB_RAW_URL="https://raw.githubusercontent.com"
 readonly API_GROUP_CORE="cluster.x-k8s.io"
 readonly API_GROUP_CONTROLPLANE="controlplane.cluster.x-k8s.io"
 readonly API_GROUP_INFRA="infrastructure.cluster.x-k8s.io"
+readonly API_GROUP_ADDONS="addons.cluster.x-k8s.io"
 
 # Available providers
 readonly ALL_PROVIDERS="capi capa capz capv capvcd capg"
@@ -115,6 +116,13 @@ download_capi() {
         machinehealthchecks
     )
     download_provider_crds "${base_url}" "${API_GROUP_CORE}" "${core_crds[@]}"
+
+    # ClusterResourceSet addon CRDs (used by capi_create_cluster_resource_set etc.)
+    local addons_crds=(
+        clusterresourcesets
+        clusterresourcesetbindings
+    )
+    download_provider_crds "${base_url}" "${API_GROUP_ADDONS}" "${addons_crds[@]}"
 
     # KubeadmControlPlane CRD (from different path)
     local kcp_url="${GITHUB_RAW_URL}/${repo}/${version}/controlplane/kubeadm/config/crd/bases"

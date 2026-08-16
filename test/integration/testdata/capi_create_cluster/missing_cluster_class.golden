@@ -1,0 +1,1 @@
+internal error: failed to create cluster: cluster class test-clusters/does-not-exist not found: clusterclasses.cluster.x-k8s.io "does-not-exist" not found

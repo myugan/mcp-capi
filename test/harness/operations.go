@@ -78,6 +78,39 @@ func (op *secretOp) describe() string {
 	return fmt.Sprintf("create secret %q in namespace %q", op.name, op.namespace)
 }
 
+// configMapOp creates a Kubernetes ConfigMap resource.
+type configMapOp struct {
+	namespace string
+	name      string
+	data      map[string]string
+}
+
+func (op *configMapOp) execute(ctx context.Context, ec *executionContext) {
+	ec.t.Helper()
+	ec.t.Logf("creating configmap '%s' in namespace '%s'", op.name, op.namespace)
+	ec.k8sEnv.createConfigMap(ctx, op.namespace, op.name, op.data)
+}
+
+func (op *configMapOp) describe() string {
+	return fmt.Sprintf("create configmap %q in namespace %q", op.name, op.namespace)
+}
+
+// clusterClassOp creates a CAPI ClusterClass resource.
+type clusterClassOp struct {
+	namespace string
+	name      string
+}
+
+func (op *clusterClassOp) execute(ctx context.Context, ec *executionContext) {
+	ec.t.Helper()
+	ec.t.Logf("creating clusterclass '%s' in namespace '%s'", op.name, op.namespace)
+	ec.k8sEnv.createClusterClass(ctx, op.namespace, op.name)
+}
+
+func (op *clusterClassOp) describe() string {
+	return fmt.Sprintf("create clusterclass %q in namespace %q", op.name, op.namespace)
+}
+
 // clusterOp creates a CAPI Cluster resource.
 type clusterOp struct {
 	namespace string

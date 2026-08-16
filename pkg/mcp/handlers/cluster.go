@@ -56,10 +56,15 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 				if r, ok := m["replicas"].(float64); ok {
 					replicas = int32(r)
 				}
+				var mdVariables map[string]interface{}
+				if rawMDVars, ok := m["variables"].(map[string]interface{}); ok {
+					mdVariables = rawMDVars
+				}
 				machineDeployments = append(machineDeployments, capi.MachineDeploymentSpec{
-					Class:    class,
-					Name:     mdName,
-					Replicas: replicas,
+					Class:     class,
+					Name:      mdName,
+					Replicas:  replicas,
+					Variables: mdVariables,
 				})
 			}
 		}
@@ -67,6 +72,30 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		variables := map[string]interface{}{}
 		if rawVars, ok := arguments["variables"].(map[string]interface{}); ok {
 			variables = rawVars
+		}
+
+		var clusterNetwork *capi.ClusterNetworkSpec
+		if rawNet, ok := arguments["cluster_network"].(map[string]interface{}); ok {
+			clusterNetwork = &capi.ClusterNetworkSpec{}
+			if rawPods, ok := rawNet["pods"].([]interface{}); ok {
+				for _, p := range rawPods {
+					s, ok := p.(string)
+					if !ok {
+						return nil, fmt.Errorf("cluster_network.pods entries must be strings")
+					}
+					clusterNetwork.Pods = append(clusterNetwork.Pods, s)
+				}
+			}
+			if rawServices, ok := rawNet["services"].([]interface{}); ok {
+				for _, sv := range rawServices {
+					s, ok := sv.(string)
+					if !ok {
+						return nil, fmt.Errorf("cluster_network.services entries must be strings")
+					}
+					clusterNetwork.Services = append(clusterNetwork.Services, s)
+				}
+			}
+			clusterNetwork.ServiceDomain, _ = rawNet["service_domain"].(string)
 		}
 
 		opts := capi.CreateClusterOptions{
@@ -77,6 +106,7 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 			ControlPlaneReplicas: controlPlaneReplicas,
 			MachineDeployments:   machineDeployments,
 			Variables:            variables,
+			ClusterNetwork:       clusterNetwork,
 		}
 
 		cluster, err := serverCtx.CAPIClient.CreateCluster(ctx, opts)
@@ -89,6 +119,15 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		fmt.Fprintf(&content, "  Kubernetes version: %s\n", kubernetesVersion)
 		fmt.Fprintf(&content, "  Control plane replicas: %d\n", controlPlaneReplicas)
 		fmt.Fprintf(&content, "  Machine deployments: %d\n", len(machineDeployments))
+		for _, md := range machineDeployments {
+			if len(md.Variables) > 0 {
+				fmt.Fprintf(&content, "    %s: %d variable override(s)\n", md.Name, len(md.Variables))
+			}
+		}
+		if clusterNetwork != nil {
+			fmt.Fprintf(&content, "  Cluster network: pods=%v services=%v serviceDomain=%q\n",
+				clusterNetwork.Pods, clusterNetwork.Services, clusterNetwork.ServiceDomain)
+		}
 		content.WriteString("\nUse capi_cluster_status to monitor provisioning.\n")
 
 		return &mcp.CallToolResult{

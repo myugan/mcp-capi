@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
+	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta1"                     //nolint:staticcheck // CAPI v1beta1 required until v1beta2 migration
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta1" //nolint:staticcheck // CAPI v1beta1 required until v1beta2 migration
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta1"                      //nolint:staticcheck // CAPI v1beta1 required until v1beta2 migration
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -57,6 +58,9 @@ func NewClient(kubeconfig string) (*Client, error) {
 	}
 	if err := clusterv1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("failed to add CAPI to scheme: %w", err)
+	}
+	if err := addonsv1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("failed to add CAPI addons to scheme: %w", err)
 	}
 
 	ctrlClient, err := client.New(config, client.Options{
@@ -521,6 +525,23 @@ type MachineDeploymentSpec struct {
 	Name string
 	// Replicas is the number of worker nodes for this machine deployment.
 	Replicas int32
+	// Variables overrides Cluster-level topology variables for this
+	// MachineDeployment specifically (e.g. a different instance flavor/image
+	// for workers than the control plane). Optional; names and shapes must
+	// match what the ClusterClass's MachineDeploymentClass variable schema
+	// defines.
+	Variables map[string]interface{}
+}
+
+// ClusterNetworkSpec describes spec.clusterNetwork -- the pod/service CIDR
+// ranges and service domain for a Cluster. This is independent of
+// ClusterClass topology variables (ClusterClasses do not set it), so it must
+// be provided explicitly whenever the cluster's CNI/kube-proxy expect
+// specific ranges (e.g. flannel's default 10.244.0.0/16 pod CIDR).
+type ClusterNetworkSpec struct {
+	Pods          []string
+	Services      []string
+	ServiceDomain string
 }
 
 // CreateClusterOptions contains options for creating a new cluster from an
@@ -538,6 +559,27 @@ type CreateClusterOptions struct {
 	// defines; the API server validates them against the ClusterClass's
 	// variable schemas on create.
 	Variables map[string]interface{}
+	// ClusterNetwork sets spec.clusterNetwork. Optional -- omit to leave it
+	// unset (no pod/service CIDR configured on the Cluster object).
+	ClusterNetwork *ClusterNetworkSpec
+}
+
+// toClusterVariables converts a variables map (as accepted by the
+// capi_create_cluster tool for both Cluster-level and per-MachineDeployment
+// overrides) into the []ClusterVariable form the API expects.
+func toClusterVariables(vars map[string]interface{}) ([]clusterv1.ClusterVariable, error) {
+	out := make([]clusterv1.ClusterVariable, 0, len(vars))
+	for name, value := range vars {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal value for variable %s: %w", name, err)
+		}
+		out = append(out, clusterv1.ClusterVariable{
+			Name:  name,
+			Value: apiextensionsv1.JSON{Raw: raw},
+		})
+	}
+	return out, nil
 }
 
 // CreateCluster creates a new CAPI cluster from an existing ClusterClass. It
@@ -553,26 +595,40 @@ func (c *Client) CreateCluster(ctx context.Context, opts CreateClusterOptions) (
 		return nil, fmt.Errorf("cluster class %s/%s not found: %w", opts.Namespace, opts.ClusterClass, err)
 	}
 
-	variables := make([]clusterv1.ClusterVariable, 0, len(opts.Variables))
-	for name, value := range opts.Variables {
-		raw, err := json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal value for variable %s: %w", name, err)
-		}
-		variables = append(variables, clusterv1.ClusterVariable{
-			Name:  name,
-			Value: apiextensionsv1.JSON{Raw: raw},
-		})
+	variables, err := toClusterVariables(opts.Variables)
+	if err != nil {
+		return nil, err
 	}
 
 	machineDeployments := make([]clusterv1.MachineDeploymentTopology, 0, len(opts.MachineDeployments))
 	for _, md := range opts.MachineDeployments {
 		replicas := md.Replicas
-		machineDeployments = append(machineDeployments, clusterv1.MachineDeploymentTopology{
+		topology := clusterv1.MachineDeploymentTopology{
 			Class:    md.Class,
 			Name:     md.Name,
 			Replicas: &replicas,
-		})
+		}
+		if len(md.Variables) > 0 {
+			overrides, err := toClusterVariables(md.Variables)
+			if err != nil {
+				return nil, fmt.Errorf("machine deployment %s: %w", md.Name, err)
+			}
+			topology.Variables = &clusterv1.MachineDeploymentVariables{Overrides: overrides}
+		}
+		machineDeployments = append(machineDeployments, topology)
+	}
+
+	var clusterNetwork *clusterv1.ClusterNetwork
+	if opts.ClusterNetwork != nil {
+		clusterNetwork = &clusterv1.ClusterNetwork{
+			ServiceDomain: opts.ClusterNetwork.ServiceDomain,
+		}
+		if len(opts.ClusterNetwork.Pods) > 0 {
+			clusterNetwork.Pods = &clusterv1.NetworkRanges{CIDRBlocks: opts.ClusterNetwork.Pods}
+		}
+		if len(opts.ClusterNetwork.Services) > 0 {
+			clusterNetwork.Services = &clusterv1.NetworkRanges{CIDRBlocks: opts.ClusterNetwork.Services}
+		}
 	}
 
 	controlPlaneReplicas := opts.ControlPlaneReplicas
@@ -582,6 +638,7 @@ func (c *Client) CreateCluster(ctx context.Context, opts CreateClusterOptions) (
 			Namespace: opts.Namespace,
 		},
 		Spec: clusterv1.ClusterSpec{
+			ClusterNetwork: clusterNetwork,
 			Topology: &clusterv1.Topology{
 				Class:   opts.ClusterClass,
 				Version: opts.KubernetesVersion,

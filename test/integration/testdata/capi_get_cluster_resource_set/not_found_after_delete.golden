@@ -1,0 +1,1 @@
+internal error: failed to get cluster resource set: failed to get cluster resource set test-clusters/deleted-crs: clusterresourcesets.addons.cluster.x-k8s.io "deleted-crs" not found

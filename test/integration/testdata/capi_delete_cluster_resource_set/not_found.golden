@@ -1,0 +1,1 @@
+internal error: failed to delete cluster resource set: failed to get cluster resource set test-clusters/does-not-exist: clusterresourcesets.addons.cluster.x-k8s.io "does-not-exist" not found

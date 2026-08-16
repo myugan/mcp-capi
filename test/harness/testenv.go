@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
+	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta1"                     //nolint:staticcheck // CAPI v1beta1 required until v1beta2 migration
 	controlplanev1 "sigs.k8s.io/cluster-api/api/controlplane/kubeadm/v1beta1" //nolint:staticcheck // CAPI v1beta1 required until v1beta2 migration
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta1"                      //nolint:staticcheck // CAPI v1beta1 required until v1beta2 migration
 	capierrors "sigs.k8s.io/cluster-api/errors"                               //nolint:staticcheck // TODO: migrate when CAPI v1beta2 provides a replacement type
@@ -180,6 +181,9 @@ func newTestEnv(t TestingT) *testEnv {
 	if err := controlplanev1.AddToScheme(s); err != nil {
 		t.Fatalf("failed to add KubeadmControlPlane scheme: %v", err)
 	}
+	if err := addonsv1.AddToScheme(s); err != nil {
+		t.Fatalf("failed to add CAPI addons scheme: %v", err)
+	}
 
 	// Create Kubernetes clientset
 	k8sClient, err := kubernetes.NewForConfig(cfg)
@@ -269,6 +273,22 @@ func (te *testEnv) createSecret(ctx context.Context, namespace, name string, dat
 	}
 }
 
+// createConfigMap creates a Kubernetes ConfigMap resource.
+func (te *testEnv) createConfigMap(ctx context.Context, namespace, name string, data map[string]string) {
+	te.t.Helper()
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Data: data,
+	}
+
+	if err := te.ctrlClient.Create(ctx, cm); err != nil {
+		te.t.Fatalf("failed to create configmap %s/%s: %v", namespace, name, err)
+	}
+}
+
 // createCluster creates a basic CAPI Cluster resource.
 func (te *testEnv) createCluster(ctx context.Context, namespace, name string) {
 	te.t.Helper()
@@ -291,6 +311,43 @@ func (te *testEnv) createCluster(ctx context.Context, namespace, name string) {
 
 	if err := te.ctrlClient.Create(ctx, cluster); err != nil {
 		te.t.Fatalf("failed to create cluster %s/%s: %v", namespace, name, err)
+	}
+}
+
+// createClusterClass creates a minimal CAPI ClusterClass resource -- enough
+// to satisfy capi_create_cluster's existence check and the ClusterClass
+// CRD's own required fields (controlPlane.ref, infrastructure.ref). The
+// referenced templates are not created; nothing in this test environment
+// reconciles ClusterClass/Cluster objects, so a dangling reference is fine.
+func (te *testEnv) createClusterClass(ctx context.Context, namespace, name string) {
+	te.t.Helper()
+	cc := &clusterv1.ClusterClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: clusterv1.ClusterClassSpec{
+			Infrastructure: clusterv1.LocalObjectTemplate{
+				Ref: &corev1.ObjectReference{
+					APIVersion: "infrastructure.cluster.x-k8s.io/v1alpha1",
+					Kind:       "FakeClusterTemplate",
+					Name:       name + "-infra",
+				},
+			},
+			ControlPlane: clusterv1.ControlPlaneClass{
+				LocalObjectTemplate: clusterv1.LocalObjectTemplate{
+					Ref: &corev1.ObjectReference{
+						APIVersion: "controlplane.cluster.x-k8s.io/v1beta1",
+						Kind:       "FakeControlPlaneTemplate",
+						Name:       name + "-control-plane",
+					},
+				},
+			},
+		},
+	}
+
+	if err := te.ctrlClient.Create(ctx, cc); err != nil {
+		te.t.Fatalf("failed to create clusterclass %s/%s: %v", namespace, name, err)
 	}
 }
 

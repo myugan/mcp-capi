@@ -127,22 +127,101 @@ func (c *Client) ScaleControlPlane(ctx context.Context, namespace, name string, 
 	return nil
 }
 
-// ScaleCluster scales either control plane or worker nodes of a cluster
+// ScaleCluster scales either control plane or worker nodes of a cluster.
+//
+// For ClusterClass-managed clusters (Cluster.Spec.Topology set), the
+// topology controller treats spec.topology as the sole source of truth and
+// reconciles any direct KubeadmControlPlane/MachineDeployment replica patch
+// straight back to whatever the topology spec says. So for those clusters
+// the replica count is patched on the Cluster's topology spec instead --
+// the change that actually sticks.
 func (c *Client) ScaleCluster(ctx context.Context, namespace, clusterName, target string, replicas int, machineDeploymentName string) error {
 	if replicas < 0 || replicas > math.MaxInt32 {
 		return fmt.Errorf("replicas %d out of range for int32", replicas)
 	}
+	r := int32(replicas) //#nosec G115 -- bounded above
+
+	cluster, err := c.GetCluster(ctx, namespace, clusterName)
+	if err != nil {
+		return err
+	}
+
+	if cluster.Spec.Topology != nil {
+		return c.scaleClusterTopology(ctx, cluster, target, r, machineDeploymentName)
+	}
+
 	switch target {
 	case "controlplane":
-		return c.ScaleControlPlane(ctx, namespace, clusterName, int32(replicas)) //#nosec G115 -- bounded above
+		return c.ScaleControlPlane(ctx, namespace, clusterName, r)
 	case "workers":
 		if machineDeploymentName == "" {
 			return fmt.Errorf("machineDeployment name is required when scaling workers")
 		}
-		return c.ScaleMachineDeployment(ctx, namespace, machineDeploymentName, int32(replicas)) //#nosec G115 -- bounded above
+		return c.ScaleMachineDeployment(ctx, namespace, machineDeploymentName, r)
 	default:
 		return fmt.Errorf("invalid target: %s (must be 'controlplane' or 'workers')", target)
 	}
+}
+
+// scaleClusterTopology patches spec.topology on a ClusterClass-managed
+// Cluster so the topology controller's reconcile converges on the new
+// replica count instead of reverting it.
+func (c *Client) scaleClusterTopology(ctx context.Context, cluster *clusterv1.Cluster, target string, replicas int32, machineDeploymentName string) error {
+	switch target {
+	case "controlplane":
+		cluster.Spec.Topology.ControlPlane.Replicas = &replicas
+	case "workers":
+		if machineDeploymentName == "" {
+			return fmt.Errorf("machineDeployment name is required when scaling workers")
+		}
+		if cluster.Spec.Topology.Workers == nil {
+			return fmt.Errorf("cluster %s/%s has no worker machine deployments in its topology", cluster.Namespace, cluster.Name)
+		}
+
+		topologyName, err := c.resolveMachineDeploymentTopologyName(ctx, cluster.Namespace, machineDeploymentName)
+		if err != nil {
+			return err
+		}
+
+		found := false
+		for i := range cluster.Spec.Topology.Workers.MachineDeployments {
+			md := &cluster.Spec.Topology.Workers.MachineDeployments[i]
+			if md.Name == topologyName {
+				md.Replicas = &replicas
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("machine deployment %q not found in cluster %s/%s topology", machineDeploymentName, cluster.Namespace, cluster.Name)
+		}
+	default:
+		return fmt.Errorf("invalid target: %s (must be 'controlplane' or 'workers')", target)
+	}
+
+	if err := c.ctrlClient.Update(ctx, cluster); err != nil {
+		return fmt.Errorf("failed to scale cluster topology: %w", err)
+	}
+
+	return nil
+}
+
+// resolveMachineDeploymentTopologyName resolves a machineDeployment argument
+// to the name used in Cluster.Spec.Topology.Workers.MachineDeployments[].Name
+// (e.g. "md-0"). Callers may pass either that topology name directly, or the
+// generated MachineDeployment resource name (e.g. "timbernetes-md-0-wqd6g",
+// as returned by ListMachineDeployments) -- the latter is resolved via the
+// topology name label CAPI sets on the generated resource.
+func (c *Client) resolveMachineDeploymentTopologyName(ctx context.Context, namespace, machineDeploymentName string) (string, error) {
+	md, err := c.GetMachineDeployment(ctx, namespace, machineDeploymentName)
+	if err != nil {
+		// Not a generated resource name -- assume it's already a topology name.
+		return machineDeploymentName, nil
+	}
+	if topologyName, ok := md.Labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel]; ok && topologyName != "" {
+		return topologyName, nil
+	}
+	return machineDeploymentName, nil
 }
 
 // ScaleMachineDeployment scales a MachineDeployment to the specified number of replicas

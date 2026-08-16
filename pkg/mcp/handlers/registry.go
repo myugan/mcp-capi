@@ -121,12 +121,12 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 	tools = append(tools, ToolRegistration{
 		Tool: mcp.NewTool(
 			"capi_scale_cluster",
-			mcp.WithDescription("Scale cluster control plane or workers"),
+			mcp.WithDescription("Scale cluster control plane or workers. For ClusterClass-managed (topology) clusters, this patches the Cluster's topology spec so the change survives topology reconciliation, instead of the underlying KubeadmControlPlane/MachineDeployment which the topology controller would otherwise revert."),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the cluster")),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Name of the cluster")),
 			mcp.WithString("target", mcp.Required(), mcp.Description("Scale target: controlplane or workers")),
 			mcp.WithNumber("replicas", mcp.Required(), mcp.Description("Number of replicas")),
-			mcp.WithString("machineDeployment", mcp.Description("Machine deployment name (required for workers)")),
+			mcp.WithString("machineDeployment", mcp.Description("Machine deployment name (required for workers). Accepts either the generated MachineDeployment resource name or, for topology clusters, its topology name (e.g. \"md-0\")")),
 		),
 		Handler: CreateScaleClusterHandler(serverCtx),
 	})

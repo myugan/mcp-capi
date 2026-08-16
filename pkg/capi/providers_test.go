@@ -15,7 +15,7 @@ func newTopologyCluster(namespace, name string) *clusterv1.Cluster {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: clusterv1.ClusterSpec{
 			Topology: &clusterv1.Topology{
-				Class:   "capn-audit",
+				Class:   "test-clusterclass",
 				Version: "v1.35.0",
 				ControlPlane: clusterv1.ControlPlaneTopology{
 					Replicas: &controlPlaneReplicas,
@@ -31,13 +31,13 @@ func newTopologyCluster(namespace, name string) *clusterv1.Cluster {
 }
 
 func TestScaleClusterTopologyControlPlanePatchesTopologySpec(t *testing.T) {
-	c := newFakeClient(t, newTopologyCluster("default", "timbernetes"))
+	c := newFakeClient(t, newTopologyCluster("default", "test-cluster"))
 
-	if err := c.ScaleCluster(context.Background(), "default", "timbernetes", "controlplane", 3, ""); err != nil {
+	if err := c.ScaleCluster(context.Background(), "default", "test-cluster", "controlplane", 3, ""); err != nil {
 		t.Fatalf("ScaleCluster failed: %v", err)
 	}
 
-	cluster, err := c.GetCluster(context.Background(), "default", "timbernetes")
+	cluster, err := c.GetCluster(context.Background(), "default", "test-cluster")
 	if err != nil {
 		t.Fatalf("GetCluster failed: %v", err)
 	}
@@ -47,13 +47,13 @@ func TestScaleClusterTopologyControlPlanePatchesTopologySpec(t *testing.T) {
 }
 
 func TestScaleClusterTopologyWorkersByTopologyName(t *testing.T) {
-	c := newFakeClient(t, newTopologyCluster("default", "timbernetes"))
+	c := newFakeClient(t, newTopologyCluster("default", "test-cluster"))
 
-	if err := c.ScaleCluster(context.Background(), "default", "timbernetes", "workers", 5, "md-0"); err != nil {
+	if err := c.ScaleCluster(context.Background(), "default", "test-cluster", "workers", 5, "md-0"); err != nil {
 		t.Fatalf("ScaleCluster failed: %v", err)
 	}
 
-	cluster, err := c.GetCluster(context.Background(), "default", "timbernetes")
+	cluster, err := c.GetCluster(context.Background(), "default", "test-cluster")
 	if err != nil {
 		t.Fatalf("GetCluster failed: %v", err)
 	}
@@ -66,32 +66,32 @@ func TestScaleClusterTopologyWorkersByTopologyName(t *testing.T) {
 func TestScaleClusterTopologyWorkersByGeneratedResourceName(t *testing.T) {
 	generatedMD := &clusterv1.MachineDeployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "timbernetes-md-0-wqd6g",
+			Name:      "test-cluster-md-0-wqd6g",
 			Namespace: "default",
 			Labels: map[string]string{
-				clusterv1.ClusterNameLabel:                          "timbernetes",
+				clusterv1.ClusterNameLabel:                          "test-cluster",
 				clusterv1.ClusterTopologyMachineDeploymentNameLabel: "md-0",
 			},
 		},
 		Spec: clusterv1.MachineDeploymentSpec{
-			ClusterName: "timbernetes",
+			ClusterName: "test-cluster",
 			Template: clusterv1.MachineTemplateSpec{
-				Spec: clusterv1.MachineSpec{ClusterName: "timbernetes"},
+				Spec: clusterv1.MachineSpec{ClusterName: "test-cluster"},
 			},
 		},
 	}
 
-	c := newFakeClient(t, newTopologyCluster("default", "timbernetes"), generatedMD)
+	c := newFakeClient(t, newTopologyCluster("default", "test-cluster"), generatedMD)
 
 	// Pass the generated resource name, as returned by ListMachineDeployments,
 	// rather than the topology name -- this must resolve to "md-0" via the
 	// topology name label and patch the Cluster's topology spec, not the
 	// MachineDeployment object directly.
-	if err := c.ScaleCluster(context.Background(), "default", "timbernetes", "workers", 7, "timbernetes-md-0-wqd6g"); err != nil {
+	if err := c.ScaleCluster(context.Background(), "default", "test-cluster", "workers", 7, "test-cluster-md-0-wqd6g"); err != nil {
 		t.Fatalf("ScaleCluster failed: %v", err)
 	}
 
-	cluster, err := c.GetCluster(context.Background(), "default", "timbernetes")
+	cluster, err := c.GetCluster(context.Background(), "default", "test-cluster")
 	if err != nil {
 		t.Fatalf("GetCluster failed: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestScaleClusterTopologyWorkersByGeneratedResourceName(t *testing.T) {
 
 	// The generated MachineDeployment itself must be left untouched -- the
 	// topology controller owns reconciling it from the topology spec.
-	fetchedMD, err := c.GetMachineDeployment(context.Background(), "default", "timbernetes-md-0-wqd6g")
+	fetchedMD, err := c.GetMachineDeployment(context.Background(), "default", "test-cluster-md-0-wqd6g")
 	if err != nil {
 		t.Fatalf("GetMachineDeployment failed: %v", err)
 	}
@@ -112,9 +112,9 @@ func TestScaleClusterTopologyWorkersByGeneratedResourceName(t *testing.T) {
 }
 
 func TestScaleClusterTopologyWorkersUnknownMachineDeploymentErrors(t *testing.T) {
-	c := newFakeClient(t, newTopologyCluster("default", "timbernetes"))
+	c := newFakeClient(t, newTopologyCluster("default", "test-cluster"))
 
-	err := c.ScaleCluster(context.Background(), "default", "timbernetes", "workers", 3, "does-not-exist")
+	err := c.ScaleCluster(context.Background(), "default", "test-cluster", "workers", 3, "does-not-exist")
 	if err == nil {
 		t.Fatal("expected error for unknown machine deployment, got nil")
 	}

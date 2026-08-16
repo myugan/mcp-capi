@@ -209,7 +209,7 @@ func (c *Client) scaleClusterTopology(ctx context.Context, cluster *clusterv1.Cl
 // resolveMachineDeploymentTopologyName resolves a machineDeployment argument
 // to the name used in Cluster.Spec.Topology.Workers.MachineDeployments[].Name
 // (e.g. "md-0"). Callers may pass either that topology name directly, or the
-// generated MachineDeployment resource name (e.g. "timbernetes-md-0-wqd6g",
+// generated MachineDeployment resource name (e.g. "mycluster-md-0-wqd6g",
 // as returned by ListMachineDeployments) -- the latter is resolved via the
 // topology name label CAPI sets on the generated resource.
 func (c *Client) resolveMachineDeploymentTopologyName(ctx context.Context, namespace, machineDeploymentName string) (string, error) {

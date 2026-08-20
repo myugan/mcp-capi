@@ -1,0 +1,359 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: lxcmachines.infrastructure.cluster.x-k8s.io
+spec:
+  group: infrastructure.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: LXCMachine
+    listKind: LXCMachineList
+    plural: lxcmachines
+    singular: lxcmachine
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Cluster
+      jsonPath: .metadata.labels['cluster\.x-k8s\.io/cluster-name']
+      name: Cluster
+      type: string
+    - description: Machine object which owns this LXCMachine
+      jsonPath: .metadata.ownerReferences[?(@.kind=="Machine")].name
+      name: Machine
+      type: string
+    - description: Provider ID
+      jsonPath: .spec.providerID
+      name: ProviderID
+      type: string
+    - description: Machine ready status
+      jsonPath: .status.ready
+      name: Ready
+      type: string
+    - description: Time duration since creation of LXCMachine
+      jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: LXCMachine is the Schema for the lxcmachines API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LXCMachineSpec defines the desired state of LXCMachine.
+            properties:
+              config:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Config allows overriding instance configuration keys.
+
+                  Note that the provider will always set the following configuration keys:
+
+                  - `cloud-init.user-data`: cloud-init config data
+                  - `user.cluster-name`: name of owning cluster
+                  - `user.cluster-namespace`: namespace of owning cluster
+                  - `user.cluster-role`: instance role (e.g. control-plane, worker)
+                  - `user.machine-name`: name of machine (should match instance hostname)
+
+                  See https://linuxcontainers.org/incus/docs/main/reference/instance_options/#instance-options
+                  for details.
+                type: object
+              devices:
+                description: |-
+                  Devices allows overriding the configuration of the instance disk or network.
+
+                  Device configuration must be formatted using the syntax "<device>,<key>=<value>".
+
+                  For example, to specify a different network for an instance, you can use:
+
+                  ```yaml
+                  # override device "eth0", to be of type "nic" and use network "my-network"
+                  devices:
+                  - eth0,type=nic,network=my-network
+                  ```
+                items:
+                  type: string
+                type: array
+              flavor:
+                description: |-
+                  Flavor is configuration for the instance size (e.g. t3.micro, or c2-m4).
+
+                  Examples:
+
+                    - `t3.micro` -- match specs of an EC2 t3.micro instance
+                    - `c2-m4` -- 2 cores, 4 GB RAM
+                type: string
+              image:
+                description: |-
+                  Image to use for provisioning the machine. If not set, a kubeadm image
+                  from the default upstream simplestreams source will be used, based on
+                  the version of the machine.
+
+                  Note that the default source does not support images for all Kubernetes
+                  versions, refer to the documentation for more details on which versions
+                  are supported and how to build a base image for any version.
+                properties:
+                  fingerprint:
+                    description: Fingerprint is the image fingerprint.
+                    type: string
+                  name:
+                    description: |-
+                      Name is the image name or alias.
+
+                      Note that Incus and Canonical LXD use incompatible image servers. To help
+                      mitigate this issue, the following image names are recognized:
+
+                      For Incus:
+
+                        - `ubuntu:VERSION` => `ubuntu/VERSION/cloud` from https://images.linuxcontainers.org
+                        - `debian:VERSION` => `debian/VERSION/cloud` from https://images.linuxcontainers.org
+                        - `images:IMAGE` => `IMAGE` from https://images.linuxcontainers.org
+                        - `capi:IMAGE` => `IMAGE` from https://images.linuxcontainers.org/capn/
+                        - `capi-stg:IMAGE` => `IMAGE` from https://images-stg.capn.open-cloud.xyz/capn/staging/
+
+                      For LXD:
+
+                        - `ubuntu:VERSION` => `VERSION` from https://cloud-images.ubuntu.com/releases
+                        - `debian:VERSION` => `debian/VERSION/cloud` from https://images.lxd.canonical.com
+                        - `images:IMAGE` => `IMAGE` from https://images.lxd.canonical.com
+                        - `capi:IMAGE` => `IMAGE` from https://images.linuxcontainers.org/capn/
+                        - `capi-stg:IMAGE` => `IMAGE` from https://images-stg.capn.open-cloud.xyz/capn/staging/
+
+                      Any instances of `VERSION` in the image name will be replaced with the machine version.
+                      For example, to use debian based kubeadm images, you can set image name to "capi:kubeadm/VERSION/debian"
+                    type: string
+                  protocol:
+                    description: Protocol is the protocol to use for fetching the
+                      image, e.g. "simplestreams".
+                    type: string
+                  server:
+                    description: Server is the remote server, e.g. "https://images.linuxcontainers.org"
+                    type: string
+                type: object
+              instanceType:
+                description: |-
+                  InstanceType is `container` or `virtual-machine`. Empty defaults to `container`.
+
+                  InstanceType may also be set to `kind`, in which case OCI containers using the kindest/node
+                  images will be created. This requires server extensions: `instance_oci`, `instance_oci_entrypoint`.
+                enum:
+                - container
+                - virtual-machine
+                - kind
+                - ""
+                type: string
+              profiles:
+                description: Profiles is a list of profiles to attach to the instance.
+                items:
+                  type: string
+                type: array
+              providerID:
+                description: ProviderID is the container name in ProviderID format
+                  (lxc:///<containername>).
+                type: string
+              target:
+                description: |-
+                  Target where the machine should be provisioned, when infrastructure
+                  is a production cluster.
+
+                  Can be one of:
+
+                    - `name`: where `name` is the name of a cluster member.
+                    - `@name`: where `name` is the name of a cluster group.
+
+                  Target is ignored when infrastructure is single-node (e.g. for
+                  development purposes).
+
+                  For more information on cluster groups, you can refer to https://linuxcontainers.org/incus/docs/main/explanation/clustering/#cluster-groups
+                type: string
+            type: object
+          status:
+            description: LXCMachineStatus defines the observed state of LXCMachine.
+            properties:
+              addresses:
+                description: Addresses is the list of addresses of the LXC machine.
+                items:
+                  description: MachineAddress contains information for the node's
+                    address.
+                  properties:
+                    address:
+                      description: address is the machine address.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    type:
+                      description: type is the machine address type, one of Hostname,
+                        ExternalIP, InternalIP, ExternalDNS or InternalDNS.
+                      enum:
+                      - Hostname
+                      - ExternalIP
+                      - InternalIP
+                      - ExternalDNS
+                      - InternalDNS
+                      type: string
+                  required:
+                  - address
+                  - type
+                  type: object
+                type: array
+              cloudProviderNodePatchConfigured:
+                description: |-
+                  CloudProviderNodePatchConfigured will be set to true once for each node, after the cloud provider node patch is applied.
+
+                  Note that this field is only set when LXCCluster.spec.cloudProviderNodePatch is true.
+                type: boolean
+              conditions:
+                description: Conditions defines current service state of the LXCMachine.
+                items:
+                  description: Condition defines an observation of a Cluster API resource
+                    operational state.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed. If that is not known, then using the time when
+                        the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This field may be empty.
+                      maxLength: 10240
+                      minLength: 1
+                      type: string
+                    reason:
+                      description: |-
+                        reason is the reason for the condition's last transition in CamelCase.
+                        The specific API may choose whether or not this field is considered a guaranteed API.
+                        This field may be empty.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    severity:
+                      description: |-
+                        severity provides an explicit classification of Reason code, so the users or machines can immediately
+                        understand the current situation and act accordingly.
+                        The Severity field MUST be set only when Status=False.
+                      maxLength: 32
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions
+                        can be useful (see .node.status.conditions), the ability to deconflict is important.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - status
+                  - type
+                  type: object
+                type: array
+              loadBalancerConfigured:
+                description: LoadBalancerConfigured will be set to true once for each
+                  control plane node, after the load balancer instance is reconfigured.
+                type: boolean
+              ready:
+                description: Ready denotes that the LXC machine is ready.
+                type: boolean
+              v1beta2:
+                description: V1Beta2 groups all status fields that will be added in
+                  LXCMachine's status with the v1beta2 version.
+                properties:
+                  conditions:
+                    description: |-
+                      conditions represents the observations of a LXCMachine's current state.
+                      Known condition types are Ready, InstanceProvisioned, Deleting, Paused.
+                    items:
+                      description: Condition contains details for one aspect of the
+                        current state of this API Resource.
+                      properties:
+                        lastTransitionTime:
+                          description: |-
+                            lastTransitionTime is the last time the condition transitioned from one status to another.
+                            This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                          format: date-time
+                          type: string
+                        message:
+                          description: |-
+                            message is a human readable message indicating details about the transition.
+                            This may be an empty string.
+                          maxLength: 32768
+                          type: string
+                        observedGeneration:
+                          description: |-
+                            observedGeneration represents the .metadata.generation that the condition was set based upon.
+                            For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                            with respect to the current state of the instance.
+                          format: int64
+                          minimum: 0
+                          type: integer
+                        reason:
+                          description: |-
+                            reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                            Producers of specific condition types may define expected values and meanings for this field,
+                            and whether the values are considered a guaranteed API.
+                            The value should be a CamelCase string.
+                            This field may not be empty.
+                          maxLength: 1024
+                          minLength: 1
+                          pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                          type: string
+                        status:
+                          description: status of the condition, one of True, False,
+                            Unknown.
+                          enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                          type: string
+                        type:
+                          description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                          maxLength: 316
+                          pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                          type: string
+                      required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                      type: object
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - type
+                    x-kubernetes-list-type: map
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

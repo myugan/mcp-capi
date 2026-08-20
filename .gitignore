@@ -73,3 +73,6 @@ bin/ mcp-capi
 
 # graphify knowledge graph (regenerable, rebuilt by the post-commit hook)
 graphify-out/
+
+# Claude Code worktrees
+.claude/worktrees/

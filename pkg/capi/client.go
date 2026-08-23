@@ -456,7 +456,12 @@ func (c *Client) resolveWorkloadKubeconfigFile(ctx context.Context, namespace, c
 // test another user's RBAC against the resolved workload cluster). It is
 // the only way to set --as: the flag remains in blockedKubectlFlags so it
 // cannot be smuggled in through args.
-func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string, args []string, impersonateAs string) (string, error) {
+//
+// stdin, when non-empty, is piped to the kubectl process -- there is no
+// local filesystem for this tool to read a file from, so this is how
+// content reaches flags like "-f -" or "-o json | kubectl apply -f -"
+// equivalents (e.g. args=["apply", "-f", "-"], stdin=<manifest YAML>).
+func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string, args []string, impersonateAs, stdin string) (string, error) {
 	if len(args) == 0 {
 		return "", fmt.Errorf("at least one kubectl argument is required")
 	}
@@ -481,6 +486,9 @@ func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string,
 	}
 	kubectlArgs = append(kubectlArgs, args...)
 	cmd := exec.CommandContext(ctx, kubectlBinaryPath, kubectlArgs...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("kubectl command failed for cluster %s: %w", clusterName, err)

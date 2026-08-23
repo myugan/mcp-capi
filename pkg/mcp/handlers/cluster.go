@@ -487,8 +487,9 @@ func CreateKubectlHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		}
 
 		impersonateAs, _ := arguments["as"].(string)
+		stdin, _ := arguments["stdin"].(string)
 
-		output, err := serverCtx.CAPIClient.ExecKubectl(ctx, namespace, clusterName, args, impersonateAs)
+		output, err := serverCtx.CAPIClient.ExecKubectl(ctx, namespace, clusterName, args, impersonateAs, stdin)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr(fmt.Sprintf("kubectl execution failed\noutput:\n%s", output), err), nil
 		}

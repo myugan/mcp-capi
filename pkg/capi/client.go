@@ -451,7 +451,12 @@ func (c *Client) resolveWorkloadKubeconfigFile(ctx context.Context, namespace, c
 // resolution fails, if any argument attempts to redirect kubectl at a
 // different target, or if the resolved server host matches the management
 // cluster's own API host, the call is refused before kubectl ever runs.
-func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string, args []string) (string, error) {
+//
+// impersonateAs, when non-empty, is passed as kubectl's --as flag (e.g. to
+// test another user's RBAC against the resolved workload cluster). It is
+// the only way to set --as: the flag remains in blockedKubectlFlags so it
+// cannot be smuggled in through args.
+func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string, args []string, impersonateAs string) (string, error) {
 	if len(args) == 0 {
 		return "", fmt.Errorf("at least one kubectl argument is required")
 	}
@@ -470,7 +475,11 @@ func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string,
 	}
 	defer cleanup()
 
-	kubectlArgs := append([]string{"--kubeconfig", tmpPath}, args...)
+	kubectlArgs := []string{"--kubeconfig", tmpPath}
+	if impersonateAs != "" {
+		kubectlArgs = append(kubectlArgs, "--as", impersonateAs)
+	}
+	kubectlArgs = append(kubectlArgs, args...)
 	cmd := exec.CommandContext(ctx, kubectlBinaryPath, kubectlArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

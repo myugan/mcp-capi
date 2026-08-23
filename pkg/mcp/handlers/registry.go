@@ -146,10 +146,11 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 	tools = append(tools, ToolRegistration{
 		Tool: mcp.NewTool(
 			"capi_kubectl",
-			mcp.WithDescription("Run an arbitrary kubectl command directly against a CAPI-managed workload cluster's own API server, by dynamically resolving that cluster's kubeconfig. Cannot target the management cluster. Cannot override the resolved kubeconfig/context/server/credentials via args."),
+			mcp.WithDescription("Run an arbitrary kubectl command directly against a CAPI-managed workload cluster's own API server, by dynamically resolving that cluster's kubeconfig. Cannot target the management cluster. Cannot override the resolved kubeconfig/context/server/credentials via args. Use the as parameter (not args) to impersonate a user, e.g. for RBAC testing."),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the Cluster resource on the management cluster")),
 			mcp.WithString("cluster_name", mcp.Required(), mcp.Description("Name of the workload cluster to run kubectl against")),
 			mcp.WithArray("args", mcp.Required(), mcp.Description("kubectl arguments, e.g. [\"get\", \"pods\", \"-A\"] or [\"auth\", \"can-i\", \"--list\"]"), mcp.Items(map[string]any{"type": "string"})),
+			mcp.WithString("as", mcp.Description("Optional username to impersonate via kubectl's --as flag, e.g. for testing another user's RBAC against the resolved workload cluster")),
 		),
 		Handler: CreateKubectlHandler(serverCtx),
 	})

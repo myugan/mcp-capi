@@ -18,13 +18,13 @@ func CreateListMachinesHandler(serverCtx *ServerContext) server.ToolHandlerFunc 
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		clusterName, _ := arguments["clusterName"].(string)
 
 		machines, err := serverCtx.CAPIClient.ListMachines(ctx, namespace, clusterName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list machines: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to list machines", err), nil
 		}
 
 		var content strings.Builder
@@ -75,13 +75,13 @@ func CreateListMachineDeploymentsHandler(serverCtx *ServerContext) server.ToolHa
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		clusterName, _ := arguments["clusterName"].(string)
 
 		mds, err := serverCtx.CAPIClient.ListMachineDeployments(ctx, namespace, clusterName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list machine deployments: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to list machine deployments", err), nil
 		}
 
 		var content strings.Builder
@@ -129,16 +129,16 @@ func CreateGetMachineHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		machine, err := serverCtx.CAPIClient.GetMachine(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get machine: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get machine", err), nil
 		}
 
 		var content strings.Builder
@@ -218,11 +218,11 @@ func CreateDeleteMachineHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		force, _ := arguments["force"].(bool)
@@ -263,11 +263,11 @@ func CreateRemediateMachineHandler(serverCtx *ServerContext) server.ToolHandlerF
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		// Get current machine status first
@@ -319,15 +319,15 @@ func CreateCreateMachineDeploymentHandler(serverCtx *ServerContext) server.ToolH
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 		clusterName, ok := arguments["cluster_name"].(string)
 		if !ok || clusterName == "" {
-			return nil, fmt.Errorf("cluster_name argument is required")
+			return mcp.NewToolResultError("cluster_name argument is required"), nil
 		}
 
 		// Get replicas
@@ -417,16 +417,16 @@ func CreateScaleMachineDeploymentHandler(serverCtx *ServerContext) server.ToolHa
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		replicasFloat, ok := arguments["replicas"].(float64)
 		if !ok {
-			return nil, fmt.Errorf("replicas argument is required")
+			return mcp.NewToolResultError("replicas argument is required"), nil
 		}
 		replicas := int32(replicasFloat)
 
@@ -501,11 +501,11 @@ func CreateUpdateMachineDeploymentHandler(serverCtx *ServerContext) server.ToolH
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		// Parse optional parameters
@@ -599,11 +599,11 @@ func CreateRolloutMachineDeploymentHandler(serverCtx *ServerContext) server.Tool
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		reason, _ := arguments["reason"].(string)
@@ -652,13 +652,13 @@ func CreateListMachineSetsHandler(serverCtx *ServerContext) server.ToolHandlerFu
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		clusterName, _ := arguments["clusterName"].(string)
 
 		machineSets, err := serverCtx.CAPIClient.ListMachineSets(ctx, namespace, clusterName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list machine sets: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to list machine sets", err), nil
 		}
 
 		var content strings.Builder
@@ -710,16 +710,16 @@ func CreateGetMachineSetHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		ms, err := serverCtx.CAPIClient.GetMachineSet(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get machine set: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get machine set", err), nil
 		}
 
 		var content strings.Builder
@@ -808,7 +808,7 @@ func CreateDrainNodeHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		nodeName, _ := arguments["node_name"].(string)
 
 		if nodeName == "" && (namespace == "" || machineName == "") {
-			return nil, fmt.Errorf("either node_name or (namespace and machine_name) must be provided")
+			return mcp.NewToolResultError("either node_name or (namespace and machine_name) must be provided"), nil
 		}
 
 		opts.Namespace = namespace
@@ -894,7 +894,7 @@ func CreateCordonNodeHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		nodeName, _ := arguments["node_name"].(string)
 
 		if nodeName == "" && (namespace == "" || machineName == "") {
-			return nil, fmt.Errorf("either node_name or (namespace and machine_name) must be provided")
+			return mcp.NewToolResultError("either node_name or (namespace and machine_name) must be provided"), nil
 		}
 
 		opts.Namespace = namespace
@@ -953,7 +953,7 @@ func CreateNodeStatusHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		nodeName, _ := arguments["node_name"].(string)
 
 		if nodeName == "" && (namespace == "" || machineName == "") {
-			return nil, fmt.Errorf("either node_name or (namespace and machine_name) must be provided")
+			return mcp.NewToolResultError("either node_name or (namespace and machine_name) must be provided"), nil
 		}
 
 		opts.Namespace = namespace

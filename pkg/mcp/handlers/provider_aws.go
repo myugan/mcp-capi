@@ -22,7 +22,7 @@ func CreateAWSListClustersHandler(serverCtx *ServerContext) server.ToolHandlerFu
 		// List all clusters
 		clusters, err := serverCtx.CAPIClient.ListClusters(ctx, namespace, nil)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list clusters: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to list clusters", err), nil
 		}
 
 		var content strings.Builder
@@ -74,17 +74,17 @@ func CreateAWSGetClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		// Get the cluster
 		cluster, err := serverCtx.CAPIClient.GetCluster(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get cluster: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get cluster", err), nil
 		}
 
 		// Verify it's an AWS cluster
@@ -152,7 +152,7 @@ func CreateAWSGetMachineTemplateHandler(serverCtx *ServerContext) server.ToolHan
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, _ := arguments["name"].(string)
 
@@ -177,7 +177,7 @@ func CreateAWSGetMachineTemplateHandler(serverCtx *ServerContext) server.ToolHan
 			// For now, we'll check for machine deployments and their templates
 			mds, err := serverCtx.CAPIClient.ListMachineDeployments(ctx, namespace, "")
 			if err != nil {
-				return nil, fmt.Errorf("failed to list machine deployments: %w", err)
+				return mcp.NewToolResultErrorFromErr("failed to list machine deployments", err), nil
 			}
 
 			awsTemplateCount := 0

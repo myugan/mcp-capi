@@ -12,7 +12,7 @@ func TestToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.Cal
 	arguments := request.GetArguments()
 	message, ok := arguments["message"].(string)
 	if !ok {
-		return nil, fmt.Errorf("message argument is required and must be a string")
+		return mcp.NewToolResultError("message argument is required and must be a string"), nil
 	}
 
 	response := fmt.Sprintf("Echo from CAPI MCP Server: %s", message)

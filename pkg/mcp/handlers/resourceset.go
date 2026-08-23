@@ -125,29 +125,29 @@ func CreateCreateClusterResourceSetHandler(serverCtx *ServerContext) server.Tool
 
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 
 		rawSelector, ok := arguments["cluster_selector"].(map[string]interface{})
 		if !ok || len(rawSelector) == 0 {
-			return nil, fmt.Errorf("cluster_selector argument is required")
+			return mcp.NewToolResultError("cluster_selector argument is required"), nil
 		}
 		clusterSelector := make(map[string]string, len(rawSelector))
 		for k, v := range rawSelector {
 			s, ok := v.(string)
 			if !ok {
-				return nil, fmt.Errorf("cluster_selector[%q] must be a string", k)
+				return mcp.NewToolResultError(fmt.Sprintf("cluster_selector[%q] must be a string", k)), nil
 			}
 			clusterSelector[k] = s
 		}
 
 		resources, err := parseResourceSetResources(arguments["resources"])
 		if err != nil {
-			return nil, err
+			return mcp.NewToolResultErrorFromErr("invalid resources", err), nil
 		}
 
 		strategy, _ := arguments["strategy"].(string)
@@ -160,7 +160,7 @@ func CreateCreateClusterResourceSetHandler(serverCtx *ServerContext) server.Tool
 			Resources:       resources,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to create cluster resource set: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to create cluster resource set", err), nil
 		}
 
 		var content strings.Builder
@@ -187,7 +187,7 @@ func CreateListClusterResourceSetsHandler(serverCtx *ServerContext) server.ToolH
 
 		list, err := serverCtx.CAPIClient.ListClusterResourceSets(ctx, namespace)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list cluster resource sets: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to list cluster resource sets", err), nil
 		}
 
 		var content strings.Builder
@@ -213,16 +213,16 @@ func CreateGetClusterResourceSetHandler(serverCtx *ServerContext) server.ToolHan
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		crs, err := serverCtx.CAPIClient.GetClusterResourceSet(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get cluster resource set: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get cluster resource set", err), nil
 		}
 
 		var content strings.Builder
@@ -252,15 +252,15 @@ func CreateDeleteClusterResourceSetHandler(serverCtx *ServerContext) server.Tool
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		if err := serverCtx.CAPIClient.DeleteClusterResourceSet(ctx, namespace, name); err != nil {
-			return nil, fmt.Errorf("failed to delete cluster resource set: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to delete cluster resource set", err), nil
 		}
 
 		return &mcp.CallToolResult{

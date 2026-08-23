@@ -488,7 +488,7 @@ func CreateKubectlHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 
 		output, err := serverCtx.CAPIClient.ExecKubectl(ctx, namespace, clusterName, args)
 		if err != nil {
-			return nil, fmt.Errorf("kubectl execution failed: %w\noutput:\n%s", err, output)
+			return mcp.NewToolResultErrorFromErr(fmt.Sprintf("kubectl execution failed\noutput:\n%s", output), err), nil
 		}
 
 		var content strings.Builder
@@ -536,7 +536,7 @@ func CreateHelmHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 
 		output, err := serverCtx.CAPIClient.ExecHelm(ctx, namespace, clusterName, args)
 		if err != nil {
-			return nil, fmt.Errorf("helm execution failed: %w\noutput:\n%s", err, output)
+			return mcp.NewToolResultErrorFromErr(fmt.Sprintf("helm execution failed\noutput:\n%s", output), err), nil
 		}
 
 		var content strings.Builder

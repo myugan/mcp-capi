@@ -72,7 +72,7 @@ func CreateGetProviderConfigHandler(serverCtx *ServerContext) server.ToolHandler
 		arguments := request.GetArguments()
 		provider, ok := arguments["provider"].(string)
 		if !ok || provider == "" {
-			return nil, fmt.Errorf("provider argument is required (aws, azure, gcp, vsphere)")
+			return mcp.NewToolResultError("provider argument is required (aws, azure, gcp, vsphere)"), nil
 		}
 
 		var content strings.Builder

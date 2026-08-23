@@ -20,19 +20,19 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		clusterClass, ok := arguments["cluster_class"].(string)
 		if !ok || clusterClass == "" {
-			return nil, fmt.Errorf("cluster_class argument is required")
+			return mcp.NewToolResultError("cluster_class argument is required"), nil
 		}
 		kubernetesVersion, ok := arguments["kubernetes_version"].(string)
 		if !ok || kubernetesVersion == "" {
-			return nil, fmt.Errorf("kubernetes_version argument is required")
+			return mcp.NewToolResultError("kubernetes_version argument is required"), nil
 		}
 
 		controlPlaneReplicas := int32(1)
@@ -45,12 +45,12 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 			for _, raw := range rawMDs {
 				m, ok := raw.(map[string]interface{})
 				if !ok {
-					return nil, fmt.Errorf("each machine_deployments entry must be an object")
+					return mcp.NewToolResultError("each machine_deployments entry must be an object"), nil
 				}
 				class, _ := m["class"].(string)
 				mdName, _ := m["name"].(string)
 				if class == "" || mdName == "" {
-					return nil, fmt.Errorf("each machine_deployments entry requires class and name")
+					return mcp.NewToolResultError("each machine_deployments entry requires class and name"), nil
 				}
 				replicas := int32(0)
 				if r, ok := m["replicas"].(float64); ok {
@@ -81,7 +81,7 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 				for _, p := range rawPods {
 					s, ok := p.(string)
 					if !ok {
-						return nil, fmt.Errorf("cluster_network.pods entries must be strings")
+						return mcp.NewToolResultError("cluster_network.pods entries must be strings"), nil
 					}
 					clusterNetwork.Pods = append(clusterNetwork.Pods, s)
 				}
@@ -90,7 +90,7 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 				for _, sv := range rawServices {
 					s, ok := sv.(string)
 					if !ok {
-						return nil, fmt.Errorf("cluster_network.services entries must be strings")
+						return mcp.NewToolResultError("cluster_network.services entries must be strings"), nil
 					}
 					clusterNetwork.Services = append(clusterNetwork.Services, s)
 				}
@@ -111,7 +111,7 @@ func CreateCreateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 
 		cluster, err := serverCtx.CAPIClient.CreateCluster(ctx, opts)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create cluster: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to create cluster", err), nil
 		}
 
 		var content strings.Builder
@@ -161,7 +161,7 @@ func CreateListClustersHandler(serverCtx *ServerContext) server.ToolHandlerFunc 
 
 		clusters, err := serverCtx.CAPIClient.ListClusters(ctx, namespace, labelSelector)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list clusters: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to list clusters", err), nil
 		}
 
 		// If a search term is provided, filter clusters by name or label values
@@ -190,7 +190,7 @@ func CreateListClustersHandler(serverCtx *ServerContext) server.ToolHandlerFunc 
 		// Bulk fetch all machines in the namespace to avoid N+1 queries
 		allMachines, err := serverCtx.CAPIClient.ListMachines(ctx, namespace, "")
 		if err != nil {
-			return nil, fmt.Errorf("failed to list machines: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to list machines", err), nil
 		}
 
 		// Group machines by cluster name
@@ -231,11 +231,11 @@ func CreateGetClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		// Try exact name match first
@@ -257,7 +257,7 @@ func CreateGetClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		matched, labelErr := serverCtx.CAPIClient.FindClustersByLabelValue(ctx, namespace, name)
 		if labelErr != nil || len(matched.Items) == 0 {
 			// Return the original error if label search also fails
-			return nil, fmt.Errorf("failed to get cluster %q: no cluster found by name or label value in namespace %s", name, namespace)
+			return mcp.NewToolResultError(fmt.Sprintf("failed to get cluster %q: no cluster found by name or label value in namespace %s", name, namespace)), nil
 		}
 
 		if len(matched.Items) == 1 {
@@ -265,7 +265,7 @@ func CreateGetClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 			cluster := matched.Items[0]
 			status, err := serverCtx.CAPIClient.GetClusterStatus(ctx, cluster.Namespace, cluster.Name)
 			if err != nil {
-				return nil, fmt.Errorf("failed to get cluster status: %w", err)
+				return mcp.NewToolResultErrorFromErr("failed to get cluster status", err), nil
 			}
 			var content strings.Builder
 			fmt.Fprintf(&content, "Note: No cluster named %q found. Matched cluster by label value:\n\n", name)
@@ -309,16 +309,16 @@ func CreateClusterStatusHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		status, err := serverCtx.CAPIClient.GetClusterStatus(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get cluster status: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get cluster status", err), nil
 		}
 
 		var content strings.Builder
@@ -341,16 +341,16 @@ func CreateClusterHealthHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		health, err := serverCtx.CAPIClient.GetClusterHealth(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get cluster health: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get cluster health", err), nil
 		}
 
 		var content strings.Builder
@@ -426,25 +426,25 @@ func CreateScaleClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc 
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 		target, ok := arguments["target"].(string)
 		if !ok || target == "" {
-			return nil, fmt.Errorf("target argument is required")
+			return mcp.NewToolResultError("target argument is required"), nil
 		}
 		replicas, ok := arguments["replicas"].(float64)
 		if !ok {
-			return nil, fmt.Errorf("replicas argument is required and must be a number")
+			return mcp.NewToolResultError("replicas argument is required and must be a number"), nil
 		}
 		machineDeployment, _ := arguments["machineDeployment"].(string)
 
 		err := serverCtx.CAPIClient.ScaleCluster(ctx, namespace, name, target, int(replicas), machineDeployment)
 		if err != nil {
-			return nil, fmt.Errorf("failed to scale cluster: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to scale cluster", err), nil
 		}
 
 		return &mcp.CallToolResult{
@@ -466,22 +466,22 @@ func CreateKubectlHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		clusterName, ok := arguments["cluster_name"].(string)
 		if !ok || clusterName == "" {
-			return nil, fmt.Errorf("cluster_name argument is required")
+			return mcp.NewToolResultError("cluster_name argument is required"), nil
 		}
 
 		rawArgs, ok := arguments["args"].([]interface{})
 		if !ok || len(rawArgs) == 0 {
-			return nil, fmt.Errorf("args argument is required and must be a non-empty array of strings")
+			return mcp.NewToolResultError("args argument is required and must be a non-empty array of strings"), nil
 		}
 		args := make([]string, 0, len(rawArgs))
 		for _, a := range rawArgs {
 			s, ok := a.(string)
 			if !ok {
-				return nil, fmt.Errorf("all elements of args must be strings")
+				return mcp.NewToolResultError("all elements of args must be strings"), nil
 			}
 			args = append(args, s)
 		}
@@ -514,22 +514,22 @@ func CreateHelmHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		clusterName, ok := arguments["cluster_name"].(string)
 		if !ok || clusterName == "" {
-			return nil, fmt.Errorf("cluster_name argument is required")
+			return mcp.NewToolResultError("cluster_name argument is required"), nil
 		}
 
 		rawArgs, ok := arguments["args"].([]interface{})
 		if !ok || len(rawArgs) == 0 {
-			return nil, fmt.Errorf("args argument is required and must be a non-empty array of strings")
+			return mcp.NewToolResultError("args argument is required and must be a non-empty array of strings"), nil
 		}
 		args := make([]string, 0, len(rawArgs))
 		for _, a := range rawArgs {
 			s, ok := a.(string)
 			if !ok {
-				return nil, fmt.Errorf("all elements of args must be strings")
+				return mcp.NewToolResultError("all elements of args must be strings"), nil
 			}
 			args = append(args, s)
 		}
@@ -560,16 +560,16 @@ func CreateGetKubeconfigHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		kubeconfig, err := serverCtx.CAPIClient.GetKubeconfig(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get kubeconfig: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get kubeconfig", err), nil
 		}
 
 		var content strings.Builder
@@ -598,16 +598,16 @@ func CreatePauseClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc 
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		err := serverCtx.CAPIClient.PauseCluster(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to pause cluster: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to pause cluster", err), nil
 		}
 
 		var content strings.Builder
@@ -635,16 +635,16 @@ func CreateResumeClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		err := serverCtx.CAPIClient.ResumeCluster(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to resume cluster: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to resume cluster", err), nil
 		}
 
 		var content strings.Builder
@@ -672,18 +672,18 @@ func CreateDeleteClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 		force, _ := arguments["force"].(bool)
 
 		// Get cluster status first to show what will be deleted
 		status, err := serverCtx.CAPIClient.GetClusterStatus(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get cluster status: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get cluster status", err), nil
 		}
 
 		var content strings.Builder
@@ -718,7 +718,7 @@ func CreateDeleteClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		// Proceed with deletion
 		err = serverCtx.CAPIClient.DeleteCluster(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to delete cluster: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to delete cluster", err), nil
 		}
 
 		fmt.Fprintf(&content, "\n✅ Cluster %s/%s deletion initiated successfully.\n\n", namespace, name)
@@ -745,15 +745,15 @@ func CreateUpgradeClusterHandler(serverCtx *ServerContext) server.ToolHandlerFun
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 		targetVersion, ok := arguments["target_version"].(string)
 		if !ok || targetVersion == "" {
-			return nil, fmt.Errorf("target_version argument is required")
+			return mcp.NewToolResultError("target_version argument is required"), nil
 		}
 
 		// Default to upgrading workers
@@ -765,7 +765,7 @@ func CreateUpgradeClusterHandler(serverCtx *ServerContext) server.ToolHandlerFun
 		// Get current cluster status
 		status, err := serverCtx.CAPIClient.GetClusterStatus(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get cluster status: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get cluster status", err), nil
 		}
 
 		var content strings.Builder
@@ -784,7 +784,7 @@ func CreateUpgradeClusterHandler(serverCtx *ServerContext) server.ToolHandlerFun
 		}
 
 		if err := serverCtx.CAPIClient.UpgradeCluster(ctx, opts); err != nil {
-			return nil, fmt.Errorf("failed to upgrade cluster: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to upgrade cluster", err), nil
 		}
 
 		content.WriteString("✅ Upgrade initiated successfully!\n\n")
@@ -823,11 +823,11 @@ func CreateUpdateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		// Get labels and annotations from arguments
@@ -859,7 +859,7 @@ func CreateUpdateClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 
 		cluster, err := serverCtx.CAPIClient.UpdateCluster(ctx, opts)
 		if err != nil {
-			return nil, fmt.Errorf("failed to update cluster: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to update cluster", err), nil
 		}
 
 		var content strings.Builder
@@ -927,11 +927,11 @@ func CreateMoveClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		targetKubeconfig, _ := arguments["target_kubeconfig"].(string)
@@ -950,7 +950,7 @@ func CreateMoveClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		// Get move instructions/manifest
 		manifest, err := serverCtx.CAPIClient.MoveCluster(ctx, opts)
 		if err != nil {
-			return nil, fmt.Errorf("failed to prepare cluster move: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to prepare cluster move", err), nil
 		}
 
 		var content strings.Builder
@@ -1012,11 +1012,11 @@ func CreateBackupClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		includeSecrets, _ := arguments["include_secrets"].(bool)
@@ -1035,7 +1035,7 @@ func CreateBackupClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 
 		backup, err := serverCtx.CAPIClient.BackupCluster(ctx, opts)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create cluster backup: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to create cluster backup", err), nil
 		}
 
 		var content strings.Builder

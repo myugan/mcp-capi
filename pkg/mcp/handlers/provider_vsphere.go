@@ -22,7 +22,7 @@ func CreateVSphereListClustersHandler(serverCtx *ServerContext) server.ToolHandl
 		// List all clusters
 		clusters, err := serverCtx.CAPIClient.ListClusters(ctx, namespace, nil)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list clusters: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to list clusters", err), nil
 		}
 
 		var content strings.Builder
@@ -73,17 +73,17 @@ func CreateVSphereGetClusterHandler(serverCtx *ServerContext) server.ToolHandler
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
-			return nil, fmt.Errorf("namespace argument is required")
+			return mcp.NewToolResultError("namespace argument is required"), nil
 		}
 		name, ok := arguments["name"].(string)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("name argument is required")
+			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
 		// Get the cluster
 		cluster, err := serverCtx.CAPIClient.GetCluster(ctx, namespace, name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get cluster: %w", err)
+			return mcp.NewToolResultErrorFromErr("failed to get cluster", err), nil
 		}
 
 		// Verify it's a vSphere cluster

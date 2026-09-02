@@ -365,8 +365,10 @@ func (c *Client) GetKubeconfig(ctx context.Context, namespace, clusterName strin
 
 // kubectlBinaryPath is the absolute path to the kubectl binary baked into the
 // container image. An absolute path is used rather than relying on $PATH
-// lookup, since the runtime image has no shell/environment to speak of.
-const kubectlBinaryPath = "/usr/local/bin/kubectl"
+// lookup, since the runtime image has no shell/environment to speak of. It is
+// a var only so tests can point it at a stub binary; nothing at runtime
+// reassigns it.
+var kubectlBinaryPath = "/usr/local/bin/kubectl"
 
 // helmBinaryPath is the absolute path to the helm binary baked into the
 // container image, for the same reason as kubectlBinaryPath above.

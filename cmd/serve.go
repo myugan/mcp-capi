@@ -2,13 +2,16 @@ package cmd
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	mcppkg "github.com/giantswarm/mcp-capi/pkg/mcp"
+	"github.com/giantswarm/mcp-capi/pkg/oauth"
 )
 
 const (
@@ -26,6 +29,17 @@ func newServeCmd() *cobra.Command {
 		messageEndpoint string
 		httpEndpoint    string
 		kubeconfigPath  string
+
+		// Authentication options
+		enableOAuth     bool
+		downstreamOAuth bool
+
+		// Write policy
+		readOnly         bool
+		gitopsGuard      bool
+		exposeKubeconfig bool
+
+		debug bool
 	)
 
 	cmd := &cobra.Command{
@@ -37,13 +51,65 @@ with Cluster API (CAPI) clusters via the Model Context Protocol.
 Supports multiple transport types:
   - stdio: Standard input/output (default)
   - sse: Server-Sent Events over HTTP
-  - streamable-http: Streamable HTTP transport`,
+  - streamable-http: Streamable HTTP transport
+
+OAuth 2.1 (--enable-oauth, sse/streamable-http only) turns the server into an
+OAuth resource server. Configuration comes from the environment:
+  MCP_OAUTH_ISSUER                  public base URL of this server (required)
+  OAUTH_REDIRECT_URL                callback URL, e.g. <issuer>/oauth/callback (required)
+  MCP_OAUTH_PROVIDER                dex (default) or google
+  DEX_ISSUER_URL, DEX_CLIENT_ID, DEX_CLIENT_SECRET
+  DEX_K8S_AUTHENTICATOR_CLIENT_ID   Dex client the apiserver accepts as audience (cross-client scope)
+  DEX_CA_FILE                       CA of a private Dex
+  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+  OAUTH_TRUSTED_AUDIENCES           comma-separated client IDs whose ID tokens are accepted (SSO)
+  MCP_OAUTH_ALLOW_PRIVATE_URLS      allow the identity provider on private addresses
+  MCP_OAUTH_ENCRYPTION_KEY          32-byte key (base64 or hex) for tokens at rest
+  MCP_OAUTH_ALLOW_PUBLIC_REGISTRATION
+  OAUTH_STORAGE                     memory (default) or valkey
+  VALKEY_URL, VALKEY_PASSWORD, VALKEY_TLS_ENABLED, VALKEY_KEY_PREFIX
+
+With --downstream-oauth every Kubernetes API call authenticates with the
+caller's own OIDC ID token; the server holds no credentials of its own and
+the apiserver applies the person's RBAC.
+
+Write policy (--read-only and --gitops-guard on by default):
+  --read-only          only the tools that read are registered; every
+                       mutating Kubernetes call is refused. Pass
+                       --read-only=false to offer the
+                       create/scale/upgrade/pause/delete tools.
+  --gitops-guard       mutating calls on objects owned by Flux, Argo CD or
+                       a Helm release are refused: the change would be
+                       reverted on the next reconciliation and belongs in
+                       Git.
+  --expose-kubeconfig  offer capi_get_kubeconfig: the workload cluster's
+                       admin credentials leave the server. Off by default,
+                       independent of --read-only; without it the tool is
+                       not registered and the export is refused.
+An object labelled giantswarm.io/prevent-deletion is never deleted.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Validate input parameters before starting server
 			if err := validateServeFlags(transport, httpAddr, sseEndpoint, messageEndpoint, httpEndpoint); err != nil {
 				return fmt.Errorf("invalid configuration: %w", err)
 			}
-			return RunServe(kubeconfigPath, transport, httpAddr, sseEndpoint, messageEndpoint, httpEndpoint)
+			cfg := ServeConfig{
+				KubeconfigPath:   kubeconfigPath,
+				Transport:        transport,
+				HTTPAddr:         httpAddr,
+				SSEEndpoint:      sseEndpoint,
+				MessageEndpoint:  messageEndpoint,
+				HTTPEndpoint:     httpEndpoint,
+				DownstreamOAuth:  downstreamOAuth,
+				ReadOnly:         readOnly,
+				GitOpsGuard:      gitopsGuard,
+				ExposeKubeconfig: exposeKubeconfig,
+				Debug:            debug,
+			}
+			if enableOAuth {
+				oauthCfg := oauth.ConfigFromEnv()
+				cfg.OAuth = &oauthCfg
+			}
+			return RunServe(cfg)
 		},
 	}
 
@@ -54,6 +120,17 @@ Supports multiple transport types:
 	cmd.Flags().StringVar(&messageEndpoint, "message-endpoint", "/message", "Message endpoint path (for sse transport)")
 	cmd.Flags().StringVar(&httpEndpoint, "http-endpoint", "/mcp", "HTTP endpoint path (for streamable-http transport)")
 	cmd.Flags().StringVar(&kubeconfigPath, "kubeconfig", "", "Path to kubeconfig file (defaults to KUBECONFIG env var or ~/.kube/config)")
+
+	// Authentication flags
+	cmd.Flags().BoolVar(&enableOAuth, "enable-oauth", false, "Enable OAuth 2.1 authentication (sse/streamable-http only; configured via MCP_OAUTH_* and DEX_*/GOOGLE_* environment variables)")
+	cmd.Flags().BoolVar(&downstreamOAuth, "downstream-oauth", false, "Authenticate every Kubernetes API call with the caller's own OIDC ID token; no kubeconfig or ServiceAccount credentials are used (requires --enable-oauth)")
+
+	// Write policy flags
+	cmd.Flags().BoolVar(&readOnly, "read-only", true, "Register only the tools that read and refuse every mutating Kubernetes call (default: true; pass --read-only=false to offer the mutating tools)")
+	cmd.Flags().BoolVar(&gitopsGuard, "gitops-guard", true, "Refuse mutating calls on objects owned by a GitOps controller (Flux, Argo CD) or a Helm release; the change belongs in Git (default: true)")
+	cmd.Flags().BoolVar(&exposeKubeconfig, "expose-kubeconfig", false, "Offer capi_get_kubeconfig, handing out workload cluster admin credentials (default: false; independent of --read-only)")
+
+	cmd.Flags().BoolVar(&debug, "debug", false, "Enable debug logging")
 
 	return cmd
 }
@@ -141,19 +218,59 @@ func validateEndpointPath(path string) error {
 	return nil
 }
 
+// ServeConfig is the resolved configuration of the serve command.
+type ServeConfig struct {
+	KubeconfigPath  string
+	Transport       string
+	HTTPAddr        string
+	SSEEndpoint     string
+	MessageEndpoint string
+	HTTPEndpoint    string
+	// OAuth is nil when authentication is disabled.
+	OAuth *oauth.Config
+	// DownstreamOAuth makes the server act as the caller against Kubernetes.
+	DownstreamOAuth bool
+	// ReadOnly registers only reading tools and refuses every mutating call.
+	ReadOnly bool
+	// GitOpsGuard refuses mutating calls on GitOps- or Helm-owned objects.
+	GitOpsGuard bool
+	// ExposeKubeconfig offers capi_get_kubeconfig.
+	ExposeKubeconfig bool
+	Debug            bool
+}
+
 // RunServe contains the main server logic with support for multiple transports
 // This function is exported to allow testing
-func RunServe(kubeconfigPath, transport, httpAddr, sseEndpoint, messageEndpoint, httpEndpoint string) error {
+func RunServe(cfg ServeConfig) error {
+	if cfg.DownstreamOAuth && cfg.OAuth == nil {
+		return fmt.Errorf("invalid configuration: --downstream-oauth requires --enable-oauth")
+	}
+	if cfg.OAuth != nil && cfg.Transport == string(mcppkg.TransportStdio) {
+		return fmt.Errorf("invalid configuration: --enable-oauth is not supported with the stdio transport")
+	}
+
+	level := slog.LevelInfo
+	if cfg.Debug {
+		level = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
 	// Create server options
 	opts := mcppkg.ServerOptions{
-		KubeconfigPath:  kubeconfigPath,
-		Transport:       mcppkg.TransportType(transport),
-		HTTPAddr:        httpAddr,
-		SSEEndpoint:     sseEndpoint,
-		MessageEndpoint: messageEndpoint,
-		HTTPEndpoint:    httpEndpoint,
-		ServerName:      serverName,
-		ServerVersion:   rootCmd.Version,
+		KubeconfigPath:   cfg.KubeconfigPath,
+		Transport:        mcppkg.TransportType(cfg.Transport),
+		HTTPAddr:         cfg.HTTPAddr,
+		SSEEndpoint:      cfg.SSEEndpoint,
+		MessageEndpoint:  cfg.MessageEndpoint,
+		HTTPEndpoint:     cfg.HTTPEndpoint,
+		ServerName:       serverName,
+		ServerVersion:    rootCmd.Version,
+		OAuth:            cfg.OAuth,
+		CallerIdentity:   cfg.DownstreamOAuth,
+		ReadOnly:         cfg.ReadOnly,
+		GitOpsGuard:      cfg.GitOpsGuard,
+		ExposeKubeconfig: cfg.ExposeKubeconfig,
+		Logger:           logger,
 	}
 
 	// Create server

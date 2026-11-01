@@ -2,8 +2,10 @@
 #
 #    devctl
 #
-#    https://github.com/giantswarm/devctl/blob/0ec3e49745962245bdd6d5c282d4272c40faec37/pkg/gen/input/makefile/internal/file/Makefile.gen.go.mk.template
+#    https://github.com/giantswarm/devctl/blob/c64a781d7ee888be4af92da9cce27c321300a589/pkg/gen/input/makefile/internal/file/Makefile.gen.go.mk.template
 #
+
+PACKAGE_DIR    := ./bin-dist
 
 APPLICATION    := $(shell go list -m | cut -d '/' -f 3)
 BUILDTIMESTAMP := $(shell date -u '+%FT%TZ')
@@ -14,6 +16,10 @@ MAIN_SOURCE    := $(shell if test -e cmd/main.go; then echo cmd/main.go; else ec
 OS             := $(shell go env GOOS)
 SOURCES        := $(shell find . -name '*.go')
 VERSION        := $(shell gitsemver get)
+# Expanded first in every recipe that stamps VERSION into its output, so a failed
+# `gitsemver get` fails the build instead of producing an unversioned binary.
+# Targets that do not ship a version (test, lint, ...) never expand it.
+REQUIRE_VERSION = $(if $(VERSION),,$(error VERSION is empty: `gitsemver get` failed in $(CURDIR); pass VERSION=<version> to override))
 ifeq ($(OS), linux)
 EXTLDFLAGS := -static
 endif
@@ -65,19 +71,67 @@ $(APPLICATION)-windows-amd64.exe: $(APPLICATION)-v$(VERSION)-windows-amd64.exe
 	cp -a $< $@
 
 $(APPLICATION)-v$(VERSION)-%-amd64: $(SOURCES)
+	$(REQUIRE_VERSION)
 	@echo "====> $@"
 	CGO_ENABLED=0 GOOS=$* GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $@ "$(MAIN_SOURCE)"
 
 $(APPLICATION)-v$(VERSION)-%-arm64: $(SOURCES)
+	$(REQUIRE_VERSION)
 	@echo "====> $@"
 	CGO_ENABLED=0 GOOS=$* GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $@ "$(MAIN_SOURCE)"
 
 $(APPLICATION)-v$(VERSION)-windows-amd64.exe: $(SOURCES)
+	$(REQUIRE_VERSION)
 	@echo "====> $@"
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $@ "$(MAIN_SOURCE)"
 
+.PHONY: package-darwin-amd64 package-darwin-arm64 package-linux-amd64 package-linux-arm64 package-windows-amd64
+package-darwin-amd64: $(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-darwin-amd64.tar.gz ## Prepares a packaged darwin/amd64 version.
+	@echo "====> $@"
+package-darwin-arm64: $(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-darwin-arm64.tar.gz ## Prepares a packaged darwin/arm64 version.
+	@echo "====> $@"
+package-linux-amd64: $(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-linux-amd64.tar.gz ## Prepares a packaged linux/amd64 version.
+	@echo "====> $@"
+package-linux-arm64: $(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-linux-arm64.tar.gz ## Prepares a packaged linux/arm64 version.
+	@echo "====> $@"
+package-windows-amd64: $(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-windows-amd64.zip ## Prepares a packaged windows/amd64 version.
+	@echo "====> $@"
+
+$(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-windows-amd64.zip: DIR=$(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-windows-amd64
+$(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-windows-amd64.zip: $(APPLICATION)-v$(VERSION)-windows-amd64.exe
+	@echo "====> $@"
+	/bin/sh .github/zz_generated.windows-code-signing.sh $(APPLICATION) $(VERSION)
+	@echo "Creating directory $(DIR)"
+	mkdir -p $(DIR)
+	cp $< $(DIR)/$(APPLICATION).exe
+	cp README.md LICENSE $(DIR)
+	cd ./bin-dist && zip $(APPLICATION)-v$(VERSION)-windows-amd64.zip $(APPLICATION)-v$(VERSION)-windows-amd64/*
+	rm -rf $(DIR)
+	rm -rf $<
+
+$(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-%-amd64.tar.gz: DIR=$(PACKAGE_DIR)/$<
+$(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-%-amd64.tar.gz: $(APPLICATION)-v$(VERSION)-%-amd64
+	@echo "====> $@"
+	mkdir -p $(DIR)
+	cp $< $(DIR)/$(APPLICATION)
+	cp README.md LICENSE $(DIR)
+	tar -C $(PACKAGE_DIR) -cvzf $(PACKAGE_DIR)/$<.tar.gz $<
+	rm -rf $(DIR)
+	rm -rf $<
+
+$(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-%-arm64.tar.gz: DIR=$(PACKAGE_DIR)/$<
+$(PACKAGE_DIR)/$(APPLICATION)-v$(VERSION)-%-arm64.tar.gz: $(APPLICATION)-v$(VERSION)-%-arm64
+	@echo "====> $@"
+	mkdir -p $(DIR)
+	cp $< $(DIR)/$(APPLICATION)
+	cp README.md LICENSE $(DIR)
+	tar -C $(PACKAGE_DIR) -cvzf $(PACKAGE_DIR)/$<.tar.gz $<
+	rm -rf $(DIR)
+	rm -rf $<
+
 .PHONY: install
 install: ## Install the application.
+	$(REQUIRE_VERSION)
 	@echo "====> $@"
 	go build -ldflags "$(LDFLAGS)" -o "$(shell go env GOPATH)/bin/$(APPLICATION)" "$(MAIN_SOURCE)"
 
@@ -100,7 +154,7 @@ imports: ## Runs goimports.
 .PHONY: lint
 lint: ## Runs golangci-lint.
 	@echo "====> $@"
-	golangci-lint run -E gosec -E goconst --timeout=15m ./...
+	golangci-lint run --timeout=15m ./...
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -110,10 +164,17 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+# `-deps ./...` lists only the packages actually compiled into this module, so nancy
+# reports vulnerabilities in code we really ship. `-m all` walks the entire module
+# graph instead and flags modules that are never built: on team-stamper it reported 7
+# vulnerable modules of which 5 are not in the build at all, including golang.org/x/crypto
+# and its 13 CVEs. #680 moved to `-deps ./...` for exactly this reason; #1964 moved back
+# to `-m all` only to dodge nancy's 10 MB stdin cap, which nancy made configurable and
+# defaulted to 100 MB in v2.1.0 -- so the workaround costs accuracy for nothing.
 .PHONY: nancy
-nancy: ## Runs nancy (requires v1.0.37 or newer).
+nancy: ## Runs nancy (requires v2.1.0 or newer).
 	@echo "====> $@"
-	CGO_ENABLED=0 go list -json -m all | nancy sleuth --skip-update-check --quiet --exclude-vulnerability-file ./.nancy-ignore --additional-exclude-vulnerability-files ./.nancy-ignore.generated
+	CGO_ENABLED=0 go list -json -deps ./... | nancy sleuth --skip-update-check --quiet --exclude-vulnerability-file ./.nancy-ignore --additional-exclude-vulnerability-files ./.nancy-ignore.generated
 
 # Race detector needs a C toolchain. The architect CI image has none and runs
 # with CGO_ENABLED=0, so degrade to cgo-free there; everywhere a compiler exists
@@ -127,6 +188,7 @@ test: ## Runs go test with default values (race detector when a C toolchain is a
 
 .PHONY: build-docker
 build-docker: build-linux ## Builds docker image to registry.
+	$(REQUIRE_VERSION)
 	@echo "====> $@"
 	cp -a $(APPLICATION)-linux $(APPLICATION)
 	docker build -t ${APPLICATION}:${VERSION} .

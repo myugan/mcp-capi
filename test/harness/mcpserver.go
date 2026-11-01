@@ -6,6 +6,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/giantswarm/mcp-capi/pkg/capi"
 	mcppkg "github.com/giantswarm/mcp-capi/pkg/mcp"
 )
 
@@ -20,18 +21,21 @@ const (
 )
 
 // initializeMCPServer creates and starts the MCP server with cleanup registration.
-func initializeMCPServer(t TestingT, kubeconfigPath string, input io.Reader, output io.WriteCloser) {
+func initializeMCPServer(t TestingT, kubeconfigPath string, input io.Reader, output io.WriteCloser, policy capi.WritePolicy) {
 	t.Helper()
 
 	// Create MCP server with stdio transport
 	t.Log("creating MCP server with stdio transport")
 	opts := mcppkg.ServerOptions{
-		KubeconfigPath: kubeconfigPath,
-		Transport:      mcppkg.TransportStdio,
-		StdioInput:     input,
-		StdioOutput:    output,
-		ServerName:     serverName,
-		ServerVersion:  serverVersion,
+		KubeconfigPath:   kubeconfigPath,
+		Transport:        mcppkg.TransportStdio,
+		StdioInput:       input,
+		StdioOutput:      output,
+		ServerName:       serverName,
+		ServerVersion:    serverVersion,
+		ReadOnly:         policy.ReadOnly,
+		GitOpsGuard:      policy.GitOpsGuard,
+		ExposeKubeconfig: policy.ExposeKubeconfig,
 	}
 
 	srv, err := mcppkg.NewServer(opts)

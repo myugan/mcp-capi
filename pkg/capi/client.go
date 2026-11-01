@@ -434,13 +434,17 @@ var kubectlBinaryPath = "/usr/local/bin/kubectl"
 // container image, for the same reason as kubectlBinaryPath above.
 const helmBinaryPath = "/usr/local/bin/helm"
 
+// kubeconfigFlag points a kubectl or helm invocation at the temp kubeconfig
+// resolved here, and is also one of the flags a caller may not pass.
+const kubeconfigFlag = "--kubeconfig"
+
 // blockedKubectlFlags are flags that would let a caller override the
 // resolved workload-cluster target or otherwise escape it (pointing kubectl
 // at a different context, server, or set of credentials than the one this
 // function resolved). Any argument matching one of these is rejected before
 // kubectl ever runs.
 var blockedKubectlFlags = []string{
-	"--kubeconfig", "--context", "--cluster", "--user",
+	kubeconfigFlag, "--context", "--cluster", "--user",
 	"--server", "-s", "--token", "--as", "--as-group", "--as-uid",
 	"--client-certificate", "--client-key", "--certificate-authority",
 }
@@ -450,7 +454,7 @@ var blockedKubectlFlags = []string{
 // context, or set of credentials than the resolved workload cluster. Any
 // argument matching one of these is rejected before helm ever runs.
 var blockedHelmFlags = []string{
-	"--kubeconfig", "--kube-context", "--kube-apiserver", "--kube-token",
+	kubeconfigFlag, "--kube-context", "--kube-apiserver", "--kube-token",
 	"--kube-as-user", "--kube-as-group", "--kube-ca-file",
 	"--kube-insecure-skip-tls-verify", "--kube-tls-server-name",
 }
@@ -492,10 +496,12 @@ func (c *Client) resolveWorkloadKubeconfigFile(ctx context.Context, namespace, c
 		return "", nil, fmt.Errorf("failed to create temp kubeconfig file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	cleanup = func() { os.Remove(tmpPath) }
+	// Removing the temp file is best effort: there is nothing to do about a
+	// failure, and the file holds no credential once the process exits.
+	cleanup = func() { _ = os.Remove(tmpPath) }
 
 	if _, err := tmpFile.WriteString(kubeconfig); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		cleanup()
 		return "", nil, fmt.Errorf("failed to write temp kubeconfig file: %w", err)
 	}
@@ -542,11 +548,14 @@ func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string,
 	}
 	defer cleanup()
 
-	kubectlArgs := []string{"--kubeconfig", tmpPath}
+	kubectlArgs := []string{kubeconfigFlag, tmpPath}
 	if impersonateAs != "" {
 		kubectlArgs = append(kubectlArgs, "--as", impersonateAs)
 	}
 	kubectlArgs = append(kubectlArgs, args...)
+	// #nosec G204 -- kubectlBinaryPath is this package's fixed path to the
+	// binary in the image, and every element of args was checked against
+	// blockedKubectlFlags above; the kubeconfig is the one resolved here.
 	cmd := exec.CommandContext(ctx, kubectlBinaryPath, kubectlArgs...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
@@ -585,7 +594,10 @@ func (c *Client) ExecHelm(ctx context.Context, namespace, clusterName string, ar
 	}
 	defer cleanup()
 
-	helmArgs := append([]string{"--kubeconfig", tmpPath}, args...)
+	helmArgs := append([]string{kubeconfigFlag, tmpPath}, args...)
+	// #nosec G204 -- helmBinaryPath is this package's fixed path to the binary
+	// in the image, and every element of args was checked against
+	// blockedHelmFlags above; the kubeconfig is the one resolved here.
 	cmd := exec.CommandContext(ctx, helmBinaryPath, helmArgs...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

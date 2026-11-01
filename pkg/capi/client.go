@@ -36,28 +36,43 @@ type Client struct {
 
 	// config is the rest config used to connect
 	config *rest.Config
+
+	// policy gates every mutating call; see WritePolicy.
+	policy WritePolicy
 }
 
-// NewClient creates a new CAPI client
-func NewClient(kubeconfig string) (*Client, error) {
+// ClientOption configures a Client.
+type ClientOption func(*Client)
+
+// WithWritePolicy sets the policy applied to every mutating call. The
+// default (zero) policy permits everything.
+func WithWritePolicy(p WritePolicy) ClientOption {
+	return func(c *Client) { c.policy = p }
+}
+
+// NewClient creates a CAPI client from a kubeconfig path (or the in-cluster
+// configuration when the path is empty and no KUBECONFIG is set).
+func NewClient(kubeconfig string, opts ...ClientOption) (*Client, error) {
 	config, err := loadConfig(kubeconfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
+	return NewClientFromConfig(config, opts...)
+}
 
+// NewClientFromConfig creates a CAPI client from a REST config. Callers that
+// act on behalf of a person pass a config whose BearerToken is the person's
+// OIDC ID token; see BearerClientFactory.
+func NewClientFromConfig(config *rest.Config, opts ...ClientOption) (*Client, error) {
 	// Create standard Kubernetes client
 	k8sClient, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
 
-	// Create controller-runtime client with CAPI scheme
-	scheme := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		return nil, fmt.Errorf("failed to add core types to scheme: %w", err)
-	}
-	if err := clusterv1.AddToScheme(scheme); err != nil {
-		return nil, fmt.Errorf("failed to add CAPI to scheme: %w", err)
+	scheme, err := newScheme()
+	if err != nil {
+		return nil, err
 	}
 	if err := addonsv1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("failed to add CAPI addons to scheme: %w", err)
@@ -70,11 +85,30 @@ func NewClient(kubeconfig string) (*Client, error) {
 		return nil, fmt.Errorf("failed to create controller client: %w", err)
 	}
 
-	return &Client{
+	c := &Client{
 		k8sClient:  k8sClient,
 		ctrlClient: ctrlClient,
 		config:     config,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
+}
+
+// newScheme registers core, CAPI and KubeadmControlPlane types.
+func newScheme() (*runtime.Scheme, error) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("failed to add core types to scheme: %w", err)
+	}
+	if err := clusterv1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("failed to add CAPI to scheme: %w", err)
+	}
+	if err := controlplanev1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("failed to add KubeadmControlPlane to scheme: %w", err)
+	}
+	return scheme, nil
 }
 
 // loadConfig loads the kubeconfig from various sources
@@ -120,6 +154,11 @@ func (c *Client) GetCtrlClient() client.Client {
 func (c *Client) SetClients(k8sClient kubernetes.Interface, ctrlClient client.Client) {
 	c.k8sClient = k8sClient
 	c.ctrlClient = ctrlClient
+}
+
+// WritePolicy returns the policy applied to mutating calls.
+func (c *Client) WritePolicy() WritePolicy {
+	return c.policy
 }
 
 // ListClusters lists all CAPI clusters in the given namespace
@@ -234,6 +273,9 @@ func (c *Client) DeleteMachine(ctx context.Context, opts DeleteMachineOptions) e
 	if err := c.ctrlClient.Get(ctx, key, machine); err != nil {
 		return fmt.Errorf("failed to get machine: %w", err)
 	}
+	if err := c.policy.CheckDelete("Machine", machine); err != nil {
+		return err
+	}
 
 	// If not forcing, check if machine is safe to delete
 	if !opts.Force {
@@ -275,6 +317,9 @@ func (c *Client) RemediateMachine(ctx context.Context, opts RemediateMachineOpti
 
 	if err := c.ctrlClient.Get(ctx, key, machine); err != nil {
 		return fmt.Errorf("failed to get machine: %w", err)
+	}
+	if err := c.policy.CheckUpdate("Machine", machine); err != nil {
+		return err
 	}
 
 	// Add remediation annotation
@@ -327,8 +372,23 @@ func (c *Client) GetMachineDeployment(ctx context.Context, namespace, name strin
 	return md, nil
 }
 
-// GetKubeconfig retrieves the kubeconfig for a workload cluster
+// GetKubeconfig retrieves the kubeconfig for a workload cluster. It is the
+// cluster's admin credential, so the policy must have ExposeKubeconfig set;
+// otherwise the call is refused with ErrCredentialExport before the Secret is
+// read.
 func (c *Client) GetKubeconfig(ctx context.Context, namespace, clusterName string) (string, error) {
+	if err := c.policy.CheckCredentialExport("the kubeconfig", namespace, clusterName); err != nil {
+		return "", err
+	}
+	return c.readKubeconfig(ctx, namespace, clusterName)
+}
+
+// readKubeconfig reads a workload cluster's kubeconfig Secret without the
+// credential-export check GetKubeconfig applies. It is for internal use only,
+// where the kubeconfig never leaves the server: the exec tools write it to a
+// 0600 temp file for kubectl/helm and return only their output. Anything that
+// hands the kubeconfig to the MCP caller must go through GetKubeconfig.
+func (c *Client) readKubeconfig(ctx context.Context, namespace, clusterName string) (string, error) {
 	// Verify a real Cluster resource exists before trusting the guessed secret
 	// name below. Without this, any caller could pass an arbitrary name and
 	// retrieve whatever secret happens to exist at {name}-kubeconfig, which is
@@ -401,7 +461,7 @@ var blockedHelmFlags = []string{
 // refused. The returned cleanup func removes the temp file and must always
 // be called.
 func (c *Client) resolveWorkloadKubeconfigFile(ctx context.Context, namespace, clusterName string) (path string, cleanup func(), err error) {
-	kubeconfig, err := c.GetKubeconfig(ctx, namespace, clusterName)
+	kubeconfig, err := c.readKubeconfig(ctx, namespace, clusterName)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to get kubeconfig for cluster %s: %w", clusterName, err)
 	}
@@ -544,6 +604,9 @@ func (c *Client) PauseCluster(ctx context.Context, namespace, name string) error
 	if err := c.ctrlClient.Get(ctx, key, cluster); err != nil {
 		return fmt.Errorf("failed to get cluster: %w", err)
 	}
+	if err := c.policy.CheckUpdate("Cluster", cluster); err != nil {
+		return err
+	}
 
 	// Add paused annotation
 	if cluster.Annotations == nil {
@@ -569,6 +632,9 @@ func (c *Client) ResumeCluster(ctx context.Context, namespace, name string) erro
 	if err := c.ctrlClient.Get(ctx, key, cluster); err != nil {
 		return fmt.Errorf("failed to get cluster: %w", err)
 	}
+	if err := c.policy.CheckUpdate("Cluster", cluster); err != nil {
+		return err
+	}
 
 	// Remove paused annotation
 	if cluster.Annotations != nil {
@@ -592,6 +658,9 @@ func (c *Client) DeleteCluster(ctx context.Context, namespace, name string) erro
 
 	if err := c.ctrlClient.Get(ctx, key, cluster); err != nil {
 		return fmt.Errorf("failed to get cluster: %w", err)
+	}
+	if err := c.policy.CheckDelete("Cluster", cluster); err != nil {
+		return err
 	}
 
 	// Delete the cluster
@@ -629,6 +698,12 @@ type ClusterNetworkSpec struct {
 	Services      []string
 	ServiceDomain string
 }
+
+// The pod and service CIDRs CreateCluster gives every new Cluster.
+const (
+	DefaultPodCIDR     = "192.168.0.0/16"
+	DefaultServiceCIDR = "10.96.0.0/12"
+)
 
 // CreateClusterOptions contains options for creating a new cluster from an
 // existing ClusterClass, via spec.topology -- the same mechanism used by
@@ -673,6 +748,10 @@ func toClusterVariables(vars map[string]interface{}) ([]clusterv1.ClusterVariabl
 // plane/infrastructure objects -- those are generated by CAPI's topology
 // controller from the referenced ClusterClass.
 func (c *Client) CreateCluster(ctx context.Context, opts CreateClusterOptions) (*clusterv1.Cluster, error) {
+	if err := c.policy.CheckCreate("Cluster", opts.Namespace, opts.Name); err != nil {
+		return nil, err
+	}
+
 	// Verify the ClusterClass actually exists before submitting, for a clear
 	// error instead of a cryptic admission failure.
 	clusterClass := &clusterv1.ClusterClass{}
@@ -765,6 +844,9 @@ func (c *Client) UpgradeCluster(ctx context.Context, opts UpgradeClusterOptions)
 	if err := c.ctrlClient.Get(ctx, key, cluster); err != nil {
 		return fmt.Errorf("failed to get cluster: %w", err)
 	}
+	if err := c.policy.CheckUpdate("Cluster", cluster); err != nil {
+		return err
+	}
 
 	// Update the control plane version
 	if cluster.Spec.ControlPlaneRef != nil {
@@ -777,6 +859,9 @@ func (c *Client) UpgradeCluster(ctx context.Context, opts UpgradeClusterOptions)
 			}
 			if err := c.ctrlClient.Get(ctx, cpKey, kcp); err != nil {
 				return fmt.Errorf("failed to get control plane: %w", err)
+			}
+			if err := c.policy.CheckUpdate("KubeadmControlPlane", kcp); err != nil {
+				return err
 			}
 
 			// Update version
@@ -799,6 +884,9 @@ func (c *Client) UpgradeCluster(ctx context.Context, opts UpgradeClusterOptions)
 		for i := range mdList.Items {
 			md := &mdList.Items[i]
 			if md.Spec.Template.Spec.Version != nil {
+				if err := c.policy.CheckUpdate("MachineDeployment", md); err != nil {
+					return err
+				}
 				*md.Spec.Template.Spec.Version = opts.TargetVersion
 				if err := c.ctrlClient.Update(ctx, md); err != nil {
 					return fmt.Errorf("failed to update machine deployment %s: %w", md.Name, err)
@@ -828,6 +916,9 @@ func (c *Client) UpdateCluster(ctx context.Context, opts UpdateClusterOptions) (
 
 	if err := c.ctrlClient.Get(ctx, key, cluster); err != nil {
 		return nil, fmt.Errorf("failed to get cluster: %w", err)
+	}
+	if err := c.policy.CheckUpdate("Cluster", cluster); err != nil {
+		return nil, err
 	}
 
 	// Update labels
@@ -876,8 +967,8 @@ type MoveClusterOptions struct {
 	DryRun           bool
 }
 
-// MoveCluster prepares a cluster for migration to another management cluster
-// Note: This is a simplified implementation that exports the cluster resources
+// MoveCluster returns a placeholder manifest for moving a cluster to another
+// management cluster. It reads the Cluster, exports nothing and writes nothing.
 func (c *Client) MoveCluster(ctx context.Context, opts MoveClusterOptions) (string, error) {
 	// Get the cluster
 	cluster := &clusterv1.Cluster{}
@@ -920,14 +1011,24 @@ func (c *Client) MoveCluster(ctx context.Context, opts MoveClusterOptions) (stri
 
 // BackupClusterOptions contains options for backing up a cluster
 type BackupClusterOptions struct {
-	Namespace      string
-	Name           string
+	Namespace string
+	Name      string
+	// IncludeSecrets lists the cluster's Secrets among the resources to back
+	// up. Requires the policy's ExposeKubeconfig; refused otherwise.
 	IncludeSecrets bool
 	OutputFormat   string // yaml or json
 }
 
-// BackupCluster creates a backup of cluster resources
+// BackupCluster returns backup instructions for a cluster: a placeholder that
+// exports none of its resources and no Secret. opts.IncludeSecrets is still
+// checked against the policy's credential export (ExposeKubeconfig).
 func (c *Client) BackupCluster(ctx context.Context, opts BackupClusterOptions) (string, error) {
+	if opts.IncludeSecrets {
+		if err := c.policy.CheckCredentialExport("Secrets in the backup", opts.Namespace, opts.Name); err != nil {
+			return "", err
+		}
+	}
+
 	// Get the cluster
 	cluster := &clusterv1.Cluster{}
 	key := client.ObjectKey{
@@ -944,7 +1045,7 @@ func (c *Client) BackupCluster(ctx context.Context, opts BackupClusterOptions) (
 	backup.WriteString("# Cluster Backup\n")
 	fmt.Fprintf(&backup, "# Cluster: %s/%s\n", opts.Namespace, opts.Name)
 	fmt.Fprintf(&backup, "# Date: %v\n", cluster.CreationTimestamp)
-	backup.WriteString("# Resources included:\n")
+	backup.WriteString("# Resources a backup should include:\n")
 	backup.WriteString("# - Cluster\n")
 	backup.WriteString("# - Control Plane\n")
 	backup.WriteString("# - MachineDeployments\n")
@@ -1062,6 +1163,10 @@ type CreateMachineDeploymentOptions struct {
 
 // CreateMachineDeployment creates a new CAPI MachineDeployment
 func (c *Client) CreateMachineDeployment(ctx context.Context, opts CreateMachineDeploymentOptions) (*clusterv1.MachineDeployment, error) {
+	if err := c.policy.CheckCreate("MachineDeployment", opts.Namespace, opts.Name); err != nil {
+		return nil, err
+	}
+
 	// Create the machine deployment
 	md := &clusterv1.MachineDeployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1131,6 +1236,9 @@ func (c *Client) UpdateMachineDeployment(ctx context.Context, opts UpdateMachine
 	if err != nil {
 		return nil, fmt.Errorf("failed to get machine deployment: %w", err)
 	}
+	if err := c.policy.CheckUpdate("MachineDeployment", md); err != nil {
+		return nil, err
+	}
 
 	// Update version if specified
 	if opts.Version != nil {
@@ -1194,22 +1302,27 @@ type RolloutMachineDeploymentOptions struct {
 	Reason    string
 }
 
-// RolloutMachineDeployment triggers a rolling update of a MachineDeployment
+// RolloutReasonAnnotation records the reason of the last rollout on the
+// MachineDeployment's own metadata, which CAPI does not roll out on.
+const RolloutReasonAnnotation = "mcp-capi.giantswarm.io/rollout-reason"
+
+// RolloutMachineDeployment replaces a MachineDeployment's machines by setting
+// spec.rolloutAfter to now, as clusterctl alpha rollout restart does.
 func (c *Client) RolloutMachineDeployment(ctx context.Context, opts RolloutMachineDeploymentOptions) error {
 	md, err := c.GetMachineDeployment(ctx, opts.Namespace, opts.Name)
 	if err != nil {
 		return fmt.Errorf("failed to get machine deployment: %w", err)
 	}
-
-	// Trigger rollout by updating an annotation
-	if md.Spec.Template.Annotations == nil {
-		md.Spec.Template.Annotations = make(map[string]string)
+	if err := c.policy.CheckUpdate("MachineDeployment", md); err != nil {
+		return err
 	}
 
-	// Add rollout annotation with timestamp
-	md.Spec.Template.Annotations["cluster.x-k8s.io/rollout-triggered"] = fmt.Sprintf("%v", metav1.Now().Unix())
+	md.Spec.RolloutAfter = &metav1.Time{Time: time.Now()}
 	if opts.Reason != "" {
-		md.Spec.Template.Annotations["cluster.x-k8s.io/rollout-reason"] = opts.Reason
+		if md.Annotations == nil {
+			md.Annotations = make(map[string]string)
+		}
+		md.Annotations[RolloutReasonAnnotation] = opts.Reason
 	}
 
 	if err := c.ctrlClient.Update(ctx, md); err != nil {
@@ -1262,112 +1375,67 @@ type NodeOperationOptions struct {
 	MachineName string
 	NodeName    string
 	// For drain operations
-	GracePeriodSeconds *int32
+	GracePeriodSeconds *int64
 	IgnoreDaemonSets   bool
 	DeleteLocalData    bool
 	Force              bool
+	// Timeout bounds the whole drain; zero means DefaultDrainTimeout.
+	Timeout time.Duration
 	// For cordon operations
 	Uncordon bool
 }
 
-// DrainNode safely drains a node
-func (c *Client) DrainNode(ctx context.Context, opts NodeOperationOptions) error {
-	// Get the node name from machine if not provided
-	nodeName := opts.NodeName
-	if nodeName == "" && opts.MachineName != "" {
-		machine, err := c.GetMachine(ctx, opts.Namespace, opts.MachineName)
-		if err != nil {
-			return fmt.Errorf("failed to get machine: %w", err)
-		}
-		if machine.Status.NodeRef == nil {
-			return fmt.Errorf("machine %s has no associated node", opts.MachineName)
-		}
-		nodeName = machine.Status.NodeRef.Name
+// resolveNodeName returns opts.NodeName, or the node of the CAPI Machine
+// opts.Namespace/opts.MachineName when no node name is given.
+func (c *Client) resolveNodeName(ctx context.Context, opts NodeOperationOptions) (string, error) {
+	if opts.NodeName != "" {
+		return opts.NodeName, nil
 	}
-
-	if nodeName == "" {
-		return fmt.Errorf("either nodeName or machineName must be provided")
+	if opts.MachineName == "" {
+		return "", fmt.Errorf("either nodeName or machineName must be provided")
 	}
+	machine, err := c.GetMachine(ctx, opts.Namespace, opts.MachineName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get machine: %w", err)
+	}
+	if machine.Status.NodeRef == nil {
+		return "", fmt.Errorf("machine %s has no associated node", opts.MachineName)
+	}
+	return machine.Status.NodeRef.Name, nil
+}
 
-	// First cordon the node
+// setUnschedulable cordons (true) or uncordons (false) node nodeName.
+func (c *Client) setUnschedulable(ctx context.Context, nodeName string, unschedulable bool) error {
 	node, err := c.k8sClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
 	}
-
-	// Mark as unschedulable
-	node.Spec.Unschedulable = true
-	if _, err := c.k8sClient.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("failed to cordon node %s: %w", nodeName, err)
+	if err := c.policy.CheckUpdate("Node", node); err != nil {
+		return err
 	}
-
-	// TODO: Implement actual pod eviction logic
-	// This would involve:
-	// 1. List all pods on the node
-	// 2. Filter out daemonsets if IgnoreDaemonSets is true
-	// 3. Create eviction objects for each pod
-	// 4. Wait for pods to be evicted
-
-	// For now, return a placeholder message
-	return fmt.Errorf("drain operation not fully implemented - node %s has been cordoned", nodeName)
+	node.Spec.Unschedulable = unschedulable
+	if _, err := c.k8sClient.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("failed to update node %s: %w", nodeName, err)
+	}
+	return nil
 }
 
 // CordonNode cordons or uncordons a node
 func (c *Client) CordonNode(ctx context.Context, opts NodeOperationOptions) error {
-	// Get the node name from machine if not provided
-	nodeName := opts.NodeName
-	if nodeName == "" && opts.MachineName != "" {
-		machine, err := c.GetMachine(ctx, opts.Namespace, opts.MachineName)
-		if err != nil {
-			return fmt.Errorf("failed to get machine: %w", err)
-		}
-		if machine.Status.NodeRef == nil {
-			return fmt.Errorf("machine %s has no associated node", opts.MachineName)
-		}
-		nodeName = machine.Status.NodeRef.Name
-	}
-
-	if nodeName == "" {
-		return fmt.Errorf("either nodeName or machineName must be provided")
-	}
-
-	node, err := c.k8sClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+	nodeName, err := c.resolveNodeName(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
+		return err
 	}
-
-	// Update schedulable status
-	node.Spec.Unschedulable = !opts.Uncordon
-
-	if _, err := c.k8sClient.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("failed to update node %s: %w", nodeName, err)
-	}
-
-	return nil
+	return c.setUnschedulable(ctx, nodeName, !opts.Uncordon)
 }
 
-// GetNodeStatus gets the status of a node in the workload cluster
+// GetNodeStatus gets the status of a node through the management cluster's API.
 func (c *Client) GetNodeStatus(ctx context.Context, opts NodeOperationOptions) (*corev1.Node, error) {
-	// Get the node name from machine if not provided
-	nodeName := opts.NodeName
-	if nodeName == "" && opts.MachineName != "" {
-		machine, err := c.GetMachine(ctx, opts.Namespace, opts.MachineName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get machine: %w", err)
-		}
-		if machine.Status.NodeRef == nil {
-			return nil, fmt.Errorf("machine %s has no associated node", opts.MachineName)
-		}
-		nodeName = machine.Status.NodeRef.Name
+	nodeName, err := c.resolveNodeName(ctx, opts)
+	if err != nil {
+		return nil, err
 	}
 
-	if nodeName == "" {
-		return nil, fmt.Errorf("either nodeName or machineName must be provided")
-	}
-
-	// Get node from workload cluster
-	// Note: This uses the management cluster client. In a real implementation,
-	// you would need to get the workload cluster kubeconfig and create a client for it
 	node, err := c.k8sClient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node %s: %w", nodeName, err)

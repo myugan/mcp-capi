@@ -116,6 +116,9 @@ func (c *Client) ScaleControlPlane(ctx context.Context, namespace, name string, 
 	if err != nil {
 		return err
 	}
+	if err := c.policy.CheckUpdate("KubeadmControlPlane", kcp); err != nil {
+		return err
+	}
 
 	// Update replicas
 	kcp.Spec.Replicas = &replicas
@@ -167,6 +170,13 @@ func (c *Client) ScaleCluster(ctx context.Context, namespace, clusterName, targe
 // Cluster so the topology controller's reconcile converges on the new
 // replica count instead of reverting it.
 func (c *Client) scaleClusterTopology(ctx context.Context, cluster *clusterv1.Cluster, target string, replicas int32, machineDeploymentName string) error {
+	// The scale is written to the Cluster itself here, not to the
+	// KubeadmControlPlane/MachineDeployment the other path updates, so the
+	// policy has to be applied to the Cluster.
+	if err := c.policy.CheckUpdate("Cluster", cluster); err != nil {
+		return err
+	}
+
 	switch target {
 	case "controlplane":
 		cluster.Spec.Topology.ControlPlane.Replicas = &replicas
@@ -228,6 +238,9 @@ func (c *Client) resolveMachineDeploymentTopologyName(ctx context.Context, names
 func (c *Client) ScaleMachineDeployment(ctx context.Context, namespace, name string, replicas int32) error {
 	md, err := c.GetMachineDeployment(ctx, namespace, name)
 	if err != nil {
+		return err
+	}
+	if err := c.policy.CheckUpdate("MachineDeployment", md); err != nil {
 		return err
 	}
 

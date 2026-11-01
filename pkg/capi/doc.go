@@ -61,8 +61,27 @@
 //   - Drain nodes (partial implementation)
 //   - Get node status and information
 //
-// Note: Full node operations require access to the workload cluster,
-// which may not always be available from the management cluster context.
+// The node operations use the management cluster's API only: a workload
+// cluster Machine's node is looked up there by name.
+//
+// # Write Policy
+//
+// Every mutating method consults the client's WritePolicy before it touches
+// the API server. A read-only policy refuses all of them (ErrReadOnly); the
+// GitOps guard refuses writes to objects owned by Flux, Argo CD or a Helm
+// release (ErrManagedResource), naming the owner and where the change
+// belongs. Objects labelled giantswarm.io/prevent-deletion are never deleted
+// (ErrDeletionPrevented). The same policy decides whether a workload
+// cluster's credentials may leave the server: GetKubeconfig, and
+// BackupCluster with IncludeSecrets, are refused (ErrCredentialExport) unless
+// ExposeKubeconfig is set. The zero policy permits every write and no
+// credential export:
+//
+//	client, err := capi.NewClient("", capi.WithWritePolicy(capi.WritePolicy{
+//	    ReadOnly:         false,
+//	    GitOpsGuard:      true,
+//	    ExposeKubeconfig: false,
+//	}))
 //
 // # Error Handling
 //

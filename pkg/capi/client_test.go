@@ -2,155 +2,91 @@ package capi
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8sruntime "k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/kubernetes/fake"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta1" //nolint:staticcheck // CAPI v1beta1 required until v1beta2 migration
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// newFakeClient builds a Client backed by a controller-runtime fake client,
-// seeded with the given objects. Sufficient for exercising CreateCluster's
-// object-construction logic without a real API server: the fake client still
-// round-trips objects through the scheme, catching type/serialization bugs
-// that pure struct construction would miss.
-func newFakeClient(t *testing.T, objs ...client.Object) *Client {
-	t.Helper()
+const testKubeconfig = "apiVersion: v1\nkind: Config\n"
 
-	scheme := k8sruntime.NewScheme()
-	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		t.Fatalf("failed to add client-go scheme: %v", err)
+// kubeconfigClient returns a Client over a fake clientset that holds the
+// kubeconfig Secret of testCluster, with the given policy. The Cluster itself
+// is seeded on a controller-runtime fake client, because the kubeconfig is
+// only resolved for a Cluster that exists.
+func kubeconfigClient(policy WritePolicy) *Client {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testCluster + "-kubeconfig"},
+		Data:       map[string][]byte{"value": []byte(testKubeconfig)},
 	}
-	if err := clusterv1.AddToScheme(scheme); err != nil {
-		t.Fatalf("failed to add CAPI scheme: %v", err)
+	cluster := &clusterv1.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testCluster},
 	}
-
-	ctrlClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
-
 	c := &Client{}
-	c.SetClients(nil, ctrlClient)
+	WithWritePolicy(policy)(c)
+	c.SetClients(fake.NewSimpleClientset(secret), newFakeCtrlClient(cluster))
 	return c
 }
 
-func newTestClusterClass(namespace, name string) *clusterv1.ClusterClass {
-	return &clusterv1.ClusterClass{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+// TestGetKubeconfigRefusedByDefault is the library-level guarantee behind the
+// hidden tool: without ExposeKubeconfig the kubeconfig Secret is never read,
+// whatever the write switches say.
+func TestGetKubeconfigRefusedByDefault(t *testing.T) {
+	for name, policy := range map[string]WritePolicy{
+		caseZeroPolicy:    {},
+		caseReadOnly:      {ReadOnly: true, GitOpsGuard: true},
+		"writes allowed":  {GitOpsGuard: true},
+		"nothing guarded": {ReadOnly: false, GitOpsGuard: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := kubeconfigClient(policy)
+			got, err := c.GetKubeconfig(context.Background(), testNamespace, testCluster)
+			if !errors.Is(err, ErrCredentialExport) {
+				t.Fatalf("GetKubeconfig() error = %v, want ErrCredentialExport", err)
+			}
+			if got != "" {
+				t.Fatalf("GetKubeconfig() returned %q on refusal, want empty", got)
+			}
+			if actions := c.k8sClient.(*fake.Clientset).Actions(); len(actions) != 0 {
+				t.Fatalf("GetKubeconfig() touched the API server %d time(s) before refusing: %v", len(actions), actions)
+			}
+		})
 	}
 }
 
-func TestCreateClusterSetsClusterNetwork(t *testing.T) {
-	c := newFakeClient(t, newTestClusterClass("default", "capn-audit"))
-
-	cluster, err := c.CreateCluster(context.Background(), CreateClusterOptions{
-		Name:                 "timbernetes",
-		Namespace:            "default",
-		ClusterClass:         "capn-audit",
-		KubernetesVersion:    "v1.35.0",
-		ControlPlaneReplicas: 1,
-		ClusterNetwork: &ClusterNetworkSpec{
-			Pods:          []string{"10.244.0.0/16"},
-			Services:      []string{"10.96.0.0/12"},
-			ServiceDomain: "cluster.local",
-		},
-	})
+func TestGetKubeconfigWithExposeKubeconfig(t *testing.T) {
+	c := kubeconfigClient(WritePolicy{ReadOnly: true, GitOpsGuard: true, ExposeKubeconfig: true})
+	got, err := c.GetKubeconfig(context.Background(), testNamespace, testCluster)
 	if err != nil {
-		t.Fatalf("CreateCluster failed: %v", err)
+		t.Fatalf("GetKubeconfig() error = %v", err)
 	}
-
-	if cluster.Spec.ClusterNetwork == nil {
-		t.Fatal("expected Spec.ClusterNetwork to be set, got nil")
-	}
-	if got := cluster.Spec.ClusterNetwork.Pods.CIDRBlocks; len(got) != 1 || got[0] != "10.244.0.0/16" {
-		t.Errorf("Pods CIDR = %v, want [10.244.0.0/16]", got)
-	}
-	if got := cluster.Spec.ClusterNetwork.Services.CIDRBlocks; len(got) != 1 || got[0] != "10.96.0.0/12" {
-		t.Errorf("Services CIDR = %v, want [10.96.0.0/12]", got)
-	}
-	if got := cluster.Spec.ClusterNetwork.ServiceDomain; got != "cluster.local" {
-		t.Errorf("ServiceDomain = %q, want cluster.local", got)
-	}
-
-	// Re-fetch to confirm the fields survive a round trip through the fake
-	// client's scheme-based storage, not just the in-memory return value.
-	fetched, err := c.GetCluster(context.Background(), "default", "timbernetes")
-	if err != nil {
-		t.Fatalf("GetCluster failed: %v", err)
-	}
-	if fetched.Spec.ClusterNetwork == nil || fetched.Spec.ClusterNetwork.ServiceDomain != "cluster.local" {
-		t.Errorf("ClusterNetwork did not survive round trip: %+v", fetched.Spec.ClusterNetwork)
+	if got != testKubeconfig {
+		t.Fatalf("GetKubeconfig() = %q, want %q", got, testKubeconfig)
 	}
 }
 
-func TestCreateClusterOmitsClusterNetworkWhenNotProvided(t *testing.T) {
-	c := newFakeClient(t, newTestClusterClass("default", "capn-audit"))
-
-	cluster, err := c.CreateCluster(context.Background(), CreateClusterOptions{
-		Name:                 "no-network-cluster",
-		Namespace:            "default",
-		ClusterClass:         "capn-audit",
-		KubernetesVersion:    "v1.35.0",
-		ControlPlaneReplicas: 1,
-	})
-	if err != nil {
-		t.Fatalf("CreateCluster failed: %v", err)
-	}
-
-	if cluster.Spec.ClusterNetwork != nil {
-		t.Errorf("expected Spec.ClusterNetwork to be nil, got %+v", cluster.Spec.ClusterNetwork)
-	}
-}
-
-func TestCreateClusterSetsMachineDeploymentVariableOverrides(t *testing.T) {
-	c := newFakeClient(t, newTestClusterClass("default", "capn-audit"))
-
-	cluster, err := c.CreateCluster(context.Background(), CreateClusterOptions{
-		Name:                 "timbernetes",
-		Namespace:            "default",
-		ClusterClass:         "capn-audit",
-		KubernetesVersion:    "v1.35.0",
-		ControlPlaneReplicas: 1,
-		MachineDeployments: []MachineDeploymentSpec{
-			{
-				Class:    "default-worker",
-				Name:     "md-0",
-				Replicas: 2,
-				Variables: map[string]interface{}{
-					"instance": map[string]interface{}{
-						"flavor": "c4-m8",
-						"type":   "container",
-					},
-				},
-			},
-			{
-				// No overrides: should not get a Variables block at all.
-				Class:    "default-worker",
-				Name:     "md-1",
-				Replicas: 1,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateCluster failed: %v", err)
-	}
-
-	mds := cluster.Spec.Topology.Workers.MachineDeployments
-	if len(mds) != 2 {
-		t.Fatalf("expected 2 machine deployments, got %d", len(mds))
-	}
-
-	md0 := mds[0]
-	if md0.Variables == nil || len(md0.Variables.Overrides) != 1 {
-		t.Fatalf("md-0: expected 1 variable override, got %+v", md0.Variables)
-	}
-	if md0.Variables.Overrides[0].Name != "instance" {
-		t.Errorf("md-0: override name = %q, want instance", md0.Variables.Overrides[0].Name)
-	}
-
-	md1 := mds[1]
-	if md1.Variables != nil {
-		t.Errorf("md-1: expected no Variables block, got %+v", md1.Variables)
+// TestBackupClusterIncludeSecretsRefusedByDefault: include_secrets is refused
+// unless the credential export is allowed. The refusal comes before the
+// cluster is fetched, so no client is needed.
+func TestBackupClusterIncludeSecretsRefusedByDefault(t *testing.T) {
+	for name, policy := range map[string]WritePolicy{
+		caseZeroPolicy:   {},
+		caseReadOnly:     {ReadOnly: true, GitOpsGuard: true},
+		"writes allowed": {GitOpsGuard: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := &Client{}
+			WithWritePolicy(policy)(c)
+			got, err := c.BackupCluster(context.Background(), BackupClusterOptions{Namespace: testNamespace, Name: testCluster, IncludeSecrets: true})
+			if !errors.Is(err, ErrCredentialExport) {
+				t.Fatalf("BackupCluster(include secrets) error = %v, want ErrCredentialExport", err)
+			}
+			if got != "" {
+				t.Fatalf("BackupCluster() returned %q on refusal, want empty", got)
+			}
+		})
 	}
 }

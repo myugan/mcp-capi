@@ -1,1 +1,1 @@
-internal error: failed to get kubeconfig: failed to get kubeconfig secret: secrets "does-not-exist-kubeconfig" not found
+failed to get kubeconfig: refusing to resolve kubeconfig: no such cluster test-clusters/does-not-exist: failed to get cluster test-clusters/does-not-exist: clusters.cluster.x-k8s.io "does-not-exist" not found

@@ -6,14 +6,70 @@ import (
 	"github.com/giantswarm/mcp-capi/test/harness"
 )
 
+// TestCapiGetKubeconfig exercises the credential export. The tool is only
+// registered when the server runs with --expose-kubeconfig (the harness's
+// ExposeKubeconfig()); the first two cases pin the default.
 func TestCapiGetKubeconfig(t *testing.T) {
 	t.Parallel()
+
+	t.Run("is not offered without --expose-kubeconfig", func(t *testing.T) {
+		t.Parallel()
+		namespace := testNamespace
+
+		harness.New(t).
+			CreateNamespace(namespace).
+			CreateSecret(namespace, "hidden-cluster-kubeconfig", map[string][]byte{
+				kubeconfigSecretKey: []byte("apiVersion: v1\nkind: Config\n"),
+			}).
+			ToolCall("capi_get_kubeconfig").
+			WithArg("namespace", namespace).
+			WithArg("name", "hidden-cluster").
+			AssertError("not_offered.golden").
+			Execute()
+	})
+
+	t.Run("is not offered by a read-only server either", func(t *testing.T) {
+		t.Parallel()
+		namespace := testNamespace
+
+		harness.New(t).
+			ReadOnly().
+			CreateNamespace(namespace).
+			CreateSecret(namespace, "hidden-cluster-kubeconfig", map[string][]byte{
+				kubeconfigSecretKey: []byte("apiVersion: v1\nkind: Config\n"),
+			}).
+			ToolCall("capi_get_kubeconfig").
+			WithArg("namespace", namespace).
+			WithArg("name", "hidden-cluster").
+			AssertError("not_offered.golden").
+			Execute()
+	})
+
+	t.Run("is offered by a read-only server with --expose-kubeconfig", func(t *testing.T) {
+		t.Parallel()
+		namespace := testNamespace
+
+		harness.New(t).
+			ReadOnly().
+			ExposeKubeconfig().
+			CreateNamespace(namespace).
+			CreateClusters(namespace, "exposed-cluster").
+			CreateSecret(namespace, "exposed-cluster-kubeconfig", map[string][]byte{
+				kubeconfigSecretKey: []byte("apiVersion: v1\nkind: Config\n"),
+			}).
+			ToolCall("capi_get_kubeconfig").
+			WithArg("namespace", namespace).
+			WithArg("name", "exposed-cluster").
+			AssertContent("read_only_exposed.golden").
+			Execute()
+	})
 
 	t.Run("returns error for non-existent cluster kubeconfig", func(t *testing.T) {
 		t.Parallel()
 		namespace := testNamespace
 
 		harness.New(t).
+			ExposeKubeconfig().
 			CreateNamespace(namespace).
 			ToolCall("capi_get_kubeconfig").
 			WithArg("namespace", namespace).
@@ -45,7 +101,9 @@ users:
     client-key-data: dGVzdC1rZXk=`
 
 		harness.New(t).
+			ExposeKubeconfig().
 			CreateNamespace(namespace).
+			CreateClusters(namespace, "my-cluster").
 			CreateSecret(namespace, "my-cluster-kubeconfig", map[string][]byte{
 				kubeconfigSecretKey: []byte(kubeconfigData),
 			}).
@@ -68,7 +126,9 @@ clusters:
   name: data-cluster`
 
 		harness.New(t).
+			ExposeKubeconfig().
 			CreateNamespace(namespace).
+			CreateClusters(namespace, "data-cluster").
 			CreateSecret(namespace, "data-cluster-kubeconfig", map[string][]byte{
 				"data": []byte(kubeconfigData),
 			}).
@@ -83,6 +143,7 @@ clusters:
 		t.Parallel()
 
 		harness.New(t).
+			ExposeKubeconfig().
 			ToolCall("capi_get_kubeconfig").
 			WithArg("name", "some-cluster").
 			AssertError("missing_namespace.golden").
@@ -94,6 +155,7 @@ clusters:
 		namespace := testNamespace
 
 		harness.New(t).
+			ExposeKubeconfig().
 			CreateNamespace(namespace).
 			ToolCall("capi_get_kubeconfig").
 			WithArg("namespace", namespace).
@@ -106,7 +168,9 @@ clusters:
 		namespace := testNamespace
 
 		harness.New(t).
+			ExposeKubeconfig().
 			CreateNamespace(namespace).
+			CreateClusters(namespace, "no-key-cluster").
 			CreateSecret(namespace, "no-key-cluster-kubeconfig", map[string][]byte{
 				"cert": []byte("some-cert-data"),
 			}).
@@ -122,7 +186,9 @@ clusters:
 		namespace := testNamespace
 
 		harness.New(t).
+			ExposeKubeconfig().
 			CreateNamespace(namespace).
+			CreateClusters(namespace, "empty-cluster").
 			CreateSecret(namespace, "empty-cluster-kubeconfig", map[string][]byte{
 				kubeconfigSecretKey: []byte(""),
 			}).
@@ -138,7 +204,9 @@ clusters:
 		namespace := testNamespace
 
 		harness.New(t).
+			ExposeKubeconfig().
 			CreateNamespace(namespace).
+			CreateClusters(namespace, "both-keys-cluster").
 			CreateSecret(namespace, "both-keys-cluster-kubeconfig", map[string][]byte{
 				kubeconfigSecretKey: []byte("value-kubeconfig-content"),
 				"data":              []byte("data-kubeconfig-content"),

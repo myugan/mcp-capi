@@ -27,7 +27,7 @@ If release name contains chart name it will be used as a full name.
 Create chart name and version as used by the chart label.
 */}}
 {{- define "mcp-capi.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimAll "-._" }}
 {{- end }}
 
 {{/*
@@ -60,4 +60,150 @@ Create the name of the service account to use
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
+{{- end }}
+
+{{/*
+Platform identity contract (global.identity) fallbacks for the OAuth settings.
+Each helper returns the explicit local value (oauth.*) when set and falls back
+to global.identity / global.domain, so an umbrella chart describes the
+platform's identity provider once and a standalone install behaves as before.
+*/}}
+{{- define "mcp-capi.oauth.globalIdentity" -}}
+{{- $g := .Values.global | default dict -}}
+{{- $g.identity | default dict | toJson -}}
+{{- end }}
+
+{{- define "mcp-capi.oauth.provider" -}}
+{{- $p := .Values.oauth.provider | default "dex" -}}
+{{- if not (has $p (list "dex" "google")) -}}
+{{- fail (printf "oauth.provider must be one of: dex, google (got %q)" $p) -}}
+{{- end -}}
+{{- $p -}}
+{{- end }}
+
+{{- define "mcp-capi.oauth.baseURL" -}}
+{{- $domain := dig "domain" "" (.Values.global | default dict) -}}
+{{- if .Values.oauth.baseURL -}}
+{{- .Values.oauth.baseURL | trimSuffix "/" -}}
+{{- else if $domain -}}
+{{- printf "https://%s.%s" (include "mcp-capi.fullname" .) $domain -}}
+{{- end -}}
+{{- end }}
+
+{{- define "mcp-capi.oauth.dexIssuerURL" -}}
+{{- $identity := include "mcp-capi.oauth.globalIdentity" . | fromJson -}}
+{{- .Values.oauth.dex.issuerURL | default (dig "issuerUrl" "" $identity) -}}
+{{- end }}
+
+{{- define "mcp-capi.oauth.dexClientID" -}}
+{{- $identity := include "mcp-capi.oauth.globalIdentity" . | fromJson -}}
+{{- .Values.oauth.dex.clientID | default (dig "clientId" "" $identity) -}}
+{{- end }}
+
+{{- define "mcp-capi.oauth.existingSecret" -}}
+{{- $identity := include "mcp-capi.oauth.globalIdentity" . | fromJson -}}
+{{- .Values.oauth.existingSecret | default (dig "existingSecret" "" $identity) -}}
+{{- end }}
+
+{{/* The Secret the Deployment reads credentials from. */}}
+{{- define "mcp-capi.oauth.secretName" -}}
+{{- include "mcp-capi.oauth.existingSecret" . | default (printf "%s-oauth" (include "mcp-capi.fullname" .)) -}}
+{{- end }}
+
+{{- define "mcp-capi.oauth.caSecretName" -}}
+{{- $identity := include "mcp-capi.oauth.globalIdentity" . | fromJson -}}
+{{- .Values.oauth.dex.caSecret.name | default (dig "ca" "secretName" "" $identity) -}}
+{{- end }}
+
+{{- define "mcp-capi.oauth.caSecretKey" -}}
+{{- $identity := include "mcp-capi.oauth.globalIdentity" . | fromJson -}}
+{{- if .Values.oauth.dex.caSecret.name -}}
+{{- .Values.oauth.dex.caSecret.key | default "ca.crt" -}}
+{{- else -}}
+{{- dig "ca" "key" (.Values.oauth.dex.caSecret.key | default "ca.crt") $identity -}}
+{{- end -}}
+{{- end }}
+
+{{/* Comma-separated audiences for OAUTH_TRUSTED_AUDIENCES. */}}
+{{- define "mcp-capi.oauth.trustedAudiences" -}}
+{{- $identity := include "mcp-capi.oauth.globalIdentity" . | fromJson -}}
+{{- if .Values.oauth.trustedAudiences -}}
+{{- .Values.oauth.trustedAudiences | join "," -}}
+{{- else -}}
+{{- dig "clientId" "" $identity -}}
+{{- end -}}
+{{- end }}
+
+{{/* True when the server acts as the caller (no ServiceAccount credentials). */}}
+{{- define "mcp-capi.oauth.downstream" -}}
+{{- if and .Values.oauth.enabled .Values.oauth.downstream.enabled -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Data of the OAuth credentials Secret the chart renders (templates/oauth-secret.yaml).
+Its SHA-256 is the pod template's checksum/oauth-secret annotation, so the
+server rolls when a credential changes.
+*/}}
+{{- define "mcp-capi.oauthSecretData" -}}
+{{- $data := dict -}}
+{{- if eq (include "mcp-capi.oauth.provider" .) "dex" -}}
+{{- $_ := set $data "dex-client-secret" (.Values.oauth.dex.clientSecret | b64enc) -}}
+{{- else -}}
+{{- $_ := set $data "google-client-secret" (.Values.oauth.google.clientSecret | b64enc) -}}
+{{- end -}}
+{{- with .Values.oauth.encryptionKey -}}
+{{- $_ := set $data "oauth-encryption-key" (. | b64enc) -}}
+{{- end -}}
+{{- with .Values.oauth.storage.valkey.password -}}
+{{- $_ := set $data "valkey-password" (. | b64enc) -}}
+{{- end -}}
+{{- toYaml $data -}}
+{{- end }}
+
+{{/*
+Value of the pod template's checksum/oauth-secret annotation: the SHA-256 of
+the chart-rendered Secret's data, or oauth.existingSecretChecksum verbatim when
+the credentials come from an existing Secret the chart cannot read. Empty while
+OAuth is off, or while nothing marks the existing Secret's revision.
+*/}}
+{{- define "mcp-capi.oauthSecretChecksum" -}}
+{{- if .Values.oauth.enabled -}}
+{{- if include "mcp-capi.oauth.existingSecret" . -}}
+{{- .Values.oauth.existingSecretChecksum -}}
+{{- else -}}
+{{- include "mcp-capi.oauthSecretData" . | sha256sum -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Value of the pod template's checksum/valkey-secret annotation:
+oauth.storage.valkey.existingSecretChecksum verbatim while the Valkey password
+comes from its own existing Secret. Empty otherwise: a password in the OAuth
+Secret is covered by checksum/oauth-secret.
+*/}}
+{{- define "mcp-capi.valkeySecretChecksum" -}}
+{{- if and .Values.oauth.enabled (eq .Values.oauth.storage.type "valkey") .Values.oauth.storage.valkey.existingSecret -}}
+{{- .Values.oauth.storage.valkey.existingSecretChecksum -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Pod template annotations: podAnnotations plus the credentials checksums. Empty
+when there is nothing to annotate.
+*/}}
+{{- define "mcp-capi.podAnnotations" -}}
+{{- $annotations := dict -}}
+{{- range $key, $value := .Values.podAnnotations -}}
+{{- $_ := set $annotations $key $value -}}
+{{- end -}}
+{{- with include "mcp-capi.oauthSecretChecksum" . -}}
+{{- $_ := set $annotations "checksum/oauth-secret" . -}}
+{{- end -}}
+{{- with include "mcp-capi.valkeySecretChecksum" . -}}
+{{- $_ := set $annotations "checksum/valkey-secret" . -}}
+{{- end -}}
+{{- with $annotations -}}
+{{- toYaml . -}}
+{{- end -}}
 {{- end }}

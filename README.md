@@ -139,6 +139,96 @@ mcp-capi serve \
   --http-endpoint /api/mcp
 ```
 
+### Authentication and the caller's identity
+
+With `--enable-oauth` (sse and streamable-http transports) mcp-capi is an
+OAuth 2.1 resource server built on
+[mcp-oauth](https://github.com/giantswarm/mcp-oauth). Two kinds of bearer are
+accepted on the MCP endpoint:
+
+- an OIDC ID token forwarded by an aggregator such as
+  [muster](https://github.com/giantswarm/muster) (`forwardToken: true`), when
+  its audience is listed in `OAUTH_TRUSTED_AUDIENCES` — single sign-on;
+- an access token issued by mcp-capi's own authorization server after an
+  interactive login at the configured identity provider (Dex or Google).
+
+With `--downstream-oauth` mcp-capi **acts as the caller**: every Kubernetes API
+call authenticates with the person's ID token, the API server's OIDC
+authenticator resolves the person, and the person's RBAC governs every CAPI
+operation. The server holds no kubeconfig credentials and no ServiceAccount
+token; a request without an identity token is refused instead of falling back
+to a service identity.
+
+```bash
+export MCP_OAUTH_ISSUER=https://mcp-capi.example.com
+export OAUTH_REDIRECT_URL=https://mcp-capi.example.com/oauth/callback
+export DEX_ISSUER_URL=https://dex.example.com
+export DEX_CLIENT_ID=mcp-capi
+export DEX_CLIENT_SECRET=...
+export DEX_K8S_AUTHENTICATOR_CLIENT_ID=dex-k8s-authenticator   # audience the apiserver trusts
+export OAUTH_TRUSTED_AUDIENCES=muster-client,dex-k8s-authenticator
+mcp-capi serve --transport streamable-http --enable-oauth --downstream-oauth
+```
+
+All settings are environment variables; `mcp-capi serve --help` lists them.
+The Helm chart exposes them under `oauth.*` (see `helm/mcp-capi/README.md`);
+`oauth.downstream.enabled` (default on) mounts no ServiceAccount token and the
+chart renders no RBAC.
+
+### Write policy: read-only and the GitOps guard
+
+Two switches decide what an agent may change, a third what it may take away.
+`--read-only` and `--gitops-guard` are **on by default**, `--expose-kubeconfig`
+is **off**, in the CLI and in the Helm chart (`readOnly`, `gitopsGuard`,
+`exposeKubeconfig`).
+
+- `--read-only` registers only the tools that read (list, get, status,
+  health, backup, move plan, provider lookups). The create, scale, upgrade,
+  pause, resume, update, delete, remediate, rollout, drain and cordon
+  tools are not offered at all, and every mutating Kubernetes call is refused
+  should one be reached anyway. Pass `--read-only=false` to offer them; the
+  person's RBAC still applies to each call. Every tool carries the MCP
+  annotations of its class: the reads (and `capi_get_kubeconfig`) are
+  `readOnlyHint: true`, the writes `readOnlyHint: false` with
+  `destructiveHint: true` unless they only create (`capi_create_cluster`,
+  `capi_create_machinedeployment`), so an aggregator's read-only toolset
+  (muster's `preset:read-only`) selects exactly the reads.
+- `--gitops-guard` refuses a write to an object that a GitOps controller or a
+  Helm release owns. Such an object is recognised by its markers:
+  `kustomize.toolkit.fluxcd.io/name` and `helm.toolkit.fluxcd.io/name` (Flux),
+  `argocd.argoproj.io/instance` or the `argocd.argoproj.io/tracking-id`
+  annotation (Argo CD), `meta.helm.sh/release-name` or
+  `app.kubernetes.io/managed-by=Helm` (Helm). On a Giant Swarm management
+  cluster every workload cluster is rendered by a cluster chart from an App or
+  HelmRelease in Git, so a direct change would be reverted on the next
+  reconciliation; the error names the owner and where the change belongs.
+  Creating new objects is not guarded (there is nothing to inspect); with the
+  guard off, writes go through. Only meaningful with `--read-only=false`.
+- `--expose-kubeconfig` offers `capi_get_kubeconfig`, which hands out the
+  workload cluster's admin credentials from its kubeconfig Secret: reading a
+  Secret is not a write, but the kubeconfig is the power to do anything to
+  that cluster, so the export is a class of its own. Without the switch the
+  tool is not registered, whatever `--read-only` says, and the client refuses
+  the export (`ErrCredentialExport`) should it be reached anyway.
+  `capi_backup_cluster` checks `include_secrets` against the same switch, but
+  exports no Secret yet (#303). On a Giant Swarm management cluster this stays
+  off.
+
+Independently of all three switches, an object labelled
+`giantswarm.io/prevent-deletion` is never deleted.
+
+```bash
+# operator use against a cluster you manage by hand
+mcp-capi serve --read-only=false
+# operator use on a GitOps-managed management cluster: writes only to unmanaged objects
+mcp-capi serve --read-only=false --gitops-guard
+# a local operator who wants the workload cluster kubeconfig through the agent
+mcp-capi serve --expose-kubeconfig
+```
+
+The pod logs `Write policy readOnly=… gitopsGuard=… exposeKubeconfig=…` at
+startup; that line, not the arguments, is what to check.
+
 ### Version Management
 
 ```bash
@@ -201,34 +291,68 @@ This MCP server can be integrated with various AI assistants that support the Mo
 
 ## Available Tools
 
+### Tool results
+
+Every tool returns its result as one JSON document in the text content, so
+aggregators (muster), UIs and LLM clients parse it instead of scraping prose.
+List tools follow the [mcp-toolkit paginated result
+convention](https://github.com/giantswarm/mcp-toolkit/blob/main/docs/conventions.md):
+
+```json
+{ "items": [ { "name": "my-cluster", "namespace": "org-example", "phase": "Provisioned", "ready": true, "provider": "aws", "version": "v1.31.0", "totalMachines": 6, "readyMachines": 6 } ] }
+```
+
+`nextCursor` is omitted because the tools return all matches in one page;
+server-side pagination (`limit`/`cursor` arguments) is a follow-up. Read tools
+return the object digest directly (for example `capi_get_cluster` returns the
+cluster, `capi_node_status` the node); action tools return the identifiers they
+acted on plus a `message`. Errors stay plain-text MCP tool errors (`isError`).
+
+Tools marked **(write)** change resources. They are hidden when the server runs
+`--read-only` (the default) and subject to the GitOps guard otherwise. The tool
+marked **(credentials)** hands out a workload cluster's admin kubeconfig; it is
+hidden unless the server runs `--expose-kubeconfig`, whatever `--read-only`
+says. See [Write policy](#write-policy-read-only-and-the-gitops-guard).
+
 ### Cluster Management
-- `capi_create_cluster` - Create a new CAPI cluster
+- `capi_create_cluster` **(write)** - Create a new CAPI cluster
 - `capi_list_clusters` - List all clusters
 - `capi_get_cluster` - Get cluster details
-- `capi_delete_cluster` - Delete a cluster
-- `capi_scale_cluster` - Scale cluster nodes
+- `capi_cluster_status` - Detailed cluster status
+- `capi_cluster_health` - Cluster health summary
+- `capi_get_kubeconfig` **(credentials)** - Retrieve the cluster's admin kubeconfig
+- `capi_backup_cluster` - Backup instructions (velero); a placeholder that exports no resources yet ([#303](https://github.com/giantswarm/mcp-capi/issues/303))
+- `capi_delete_cluster` **(write)** - Delete a cluster
+- `capi_scale_cluster` **(write)** - Scale cluster nodes
+- `capi_upgrade_cluster` **(write)** - Upgrade the Kubernetes version
+- `capi_update_cluster` **(write)** - Update labels and annotations
+- `capi_pause_cluster` **(write)** - Pause reconciliation
+- `capi_resume_cluster` **(write)** - Resume reconciliation
+- `capi_move_cluster` - Plan a move to another management cluster: the steps and `clusterctl move` command; it moves nothing
 
 ### Machine Management
 - `capi_list_machines` - List machines
 - `capi_get_machine` - Get machine details
-- `capi_delete_machine` - Delete a specific machine
-- `capi_remediate_machine` - Trigger machine health check remediation
+- `capi_delete_machine` **(write)** - Delete a specific machine
+- `capi_remediate_machine` **(write)** - Trigger machine health check remediation
 
 ### MachineDeployment Operations
-- `capi_create_machinedeployment` - Create new worker node pool
+- `capi_create_machinedeployment` **(write)** - Create new worker node pool
 - `capi_list_machinedeployments` - List machine deployments
-- `capi_scale_machinedeployment` - Scale worker nodes
-- `capi_update_machinedeployment` - Update MachineDeployment configuration
-- `capi_rollout_machinedeployment` - Trigger rolling update
+- `capi_scale_machinedeployment` **(write)** - Scale worker nodes
+- `capi_update_machinedeployment` **(write)** - Update MachineDeployment configuration
+- `capi_rollout_machinedeployment` **(write)** - Roll out again (`spec.rolloutAfter`), replacing every machine
 
 ### MachineSet Operations
 - `capi_list_machinesets` - List machine sets
 - `capi_get_machineset` - Get machine set details
 
 ### Node Operations
-- `capi_drain_node` - Safely drain a node
-- `capi_cordon_node` - Cordon/uncordon nodes
-- `capi_node_status` - Get node status from workload cluster
+- `capi_drain_node` **(write)** - Cordon a node and evict its pods, respecting PodDisruptionBudgets
+- `capi_cordon_node` **(write)** - Cordon/uncordon nodes
+- `capi_node_status` - Get a node's status
+
+The node tools reach only the management cluster's API: a workload cluster Machine's node is looked up there by name ([#302](https://github.com/giantswarm/mcp-capi/issues/302)).
 
 ### Infrastructure Provider Tools
 #### Generic
@@ -241,7 +365,7 @@ This MCP server can be integrated with various AI assistants that support the Mo
 - `capi_aws_create_cluster` - Create AWS cluster (placeholder)
 - `capi_aws_update_vpc` - Update VPC configuration (placeholder)
 - `capi_aws_manage_security_groups` - Manage security groups (placeholder)
-- `capi_aws_get_machine_template` - Get/list AWS machine templates
+- `capi_aws_get_machine_template` - List the AWS machine templates MachineDeployments reference; reading one is not implemented
 
 #### Azure
 - `capi_azure_list_clusters` - List Azure clusters

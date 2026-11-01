@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/giantswarm/mcp-toolkit/tooldesc"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
@@ -23,10 +24,12 @@ func buildResourceSetTools(serverCtx *ServerContext) []ToolRegistration {
 	tools = append(tools, ToolRegistration{
 		Tool: mcp.NewTool(
 			"capi_create_cluster_resource_set",
-			mcp.WithDescription("Create a ClusterResourceSet to apply manifests (e.g. a CNI) to every Cluster matching a label selector. "+
-				"Each entry in resources is a Secret or ConfigMap holding one or more manifests: pass 'data' to create that Secret/ConfigMap "+
-				"as part of this call, or omit 'data' to reference one that already exists. Does not create or label the target Cluster(s) -- "+
-				"use capi_update_cluster to set the matching label on a Cluster."),
+			tooldesc.Describe(
+				"Create a ClusterResourceSet applying manifests, e.g. a CNI, to every Cluster matching a label selector.",
+				"Each entry in resources is a Secret or ConfigMap holding one or more manifests: pass 'data' to create that "+
+					"Secret/ConfigMap as part of this call, or omit 'data' to reference one that already exists. Does not create or "+
+					"label the target Cluster(s): set the matching label on a Cluster with capi_update_cluster.",
+			),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Name of the ClusterResourceSet")),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace for the ClusterResourceSet (and any resources created alongside it)")),
 			mcp.WithObject("cluster_selector", mcp.Required(),
@@ -121,6 +124,10 @@ func parseResourceSetResources(raw interface{}) ([]capi.ClusterResourceSetResour
 // CreateCreateClusterResourceSetHandler creates a handler for creating a new ClusterResourceSet.
 func CreateCreateClusterResourceSetHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		capiClient, err := serverCtx.Client(ctx)
+		if err != nil {
+			return nil, err
+		}
 		arguments := request.GetArguments()
 
 		name, ok := arguments["name"].(string)
@@ -152,7 +159,7 @@ func CreateCreateClusterResourceSetHandler(serverCtx *ServerContext) server.Tool
 
 		strategy, _ := arguments["strategy"].(string)
 
-		crs, err := serverCtx.CAPIClient.CreateClusterResourceSet(ctx, capi.CreateClusterResourceSetOptions{
+		crs, err := capiClient.CreateClusterResourceSet(ctx, capi.CreateClusterResourceSetOptions{
 			Name:            name,
 			Namespace:       namespace,
 			ClusterSelector: clusterSelector,
@@ -182,10 +189,14 @@ func CreateCreateClusterResourceSetHandler(serverCtx *ServerContext) server.Tool
 // CreateListClusterResourceSetsHandler creates a handler for listing ClusterResourceSets.
 func CreateListClusterResourceSetsHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		capiClient, err := serverCtx.Client(ctx)
+		if err != nil {
+			return nil, err
+		}
 		arguments := request.GetArguments()
 		namespace, _ := arguments["namespace"].(string)
 
-		list, err := serverCtx.CAPIClient.ListClusterResourceSets(ctx, namespace)
+		list, err := capiClient.ListClusterResourceSets(ctx, namespace)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to list cluster resource sets", err), nil
 		}
@@ -210,6 +221,10 @@ func CreateListClusterResourceSetsHandler(serverCtx *ServerContext) server.ToolH
 // CreateGetClusterResourceSetHandler creates a handler for getting a ClusterResourceSet.
 func CreateGetClusterResourceSetHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		capiClient, err := serverCtx.Client(ctx)
+		if err != nil {
+			return nil, err
+		}
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
@@ -220,7 +235,7 @@ func CreateGetClusterResourceSetHandler(serverCtx *ServerContext) server.ToolHan
 			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
-		crs, err := serverCtx.CAPIClient.GetClusterResourceSet(ctx, namespace, name)
+		crs, err := capiClient.GetClusterResourceSet(ctx, namespace, name)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to get cluster resource set", err), nil
 		}
@@ -249,6 +264,10 @@ func CreateGetClusterResourceSetHandler(serverCtx *ServerContext) server.ToolHan
 // CreateDeleteClusterResourceSetHandler creates a handler for deleting a ClusterResourceSet.
 func CreateDeleteClusterResourceSetHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		capiClient, err := serverCtx.Client(ctx)
+		if err != nil {
+			return nil, err
+		}
 		arguments := request.GetArguments()
 		namespace, ok := arguments["namespace"].(string)
 		if !ok || namespace == "" {
@@ -259,7 +278,7 @@ func CreateDeleteClusterResourceSetHandler(serverCtx *ServerContext) server.Tool
 			return mcp.NewToolResultError("name argument is required"), nil
 		}
 
-		if err := serverCtx.CAPIClient.DeleteClusterResourceSet(ctx, namespace, name); err != nil {
+		if err := capiClient.DeleteClusterResourceSet(ctx, namespace, name); err != nil {
 			return mcp.NewToolResultErrorFromErr("failed to delete cluster resource set", err), nil
 		}
 

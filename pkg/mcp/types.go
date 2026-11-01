@@ -2,7 +2,11 @@ package mcp
 
 import (
 	"io"
+	"log/slog"
 	"os"
+
+	"github.com/giantswarm/mcp-capi/pkg/capi"
+	"github.com/giantswarm/mcp-capi/pkg/oauth"
 )
 
 // TransportType represents the type of transport for the MCP server
@@ -48,6 +52,44 @@ type ServerOptions struct {
 
 	// StdioOutput is the output stream for stdio transport (default: os.Stdout)
 	StdioOutput io.Writer
+
+	// OAuth, when set, protects the MCP endpoint with OAuth 2.1 (sse and
+	// streamable-http transports only) and exposes the authorization
+	// endpoints next to it.
+	OAuth *oauth.Config
+
+	// CallerIdentity makes every Kubernetes API call authenticate with the
+	// caller's own OIDC ID token instead of a kubeconfig or the pod's
+	// ServiceAccount. Requires OAuth. When KubeconfigPath is set only its
+	// server address and CA are used; its credentials are discarded.
+	CallerIdentity bool
+
+	// ReadOnly registers only the tools that read (list, get, inspect,
+	// export) and refuses every mutating Kubernetes call. This is the
+	// posture for agents on a management cluster whose clusters are
+	// managed declaratively.
+	ReadOnly bool
+
+	// GitOpsGuard refuses mutating calls on objects owned by a GitOps
+	// controller (Flux, Argo CD) or a Helm release: the change would be
+	// reverted on the next reconciliation and belongs in Git. Meaningful
+	// only when ReadOnly is false.
+	GitOpsGuard bool
+
+	// ExposeKubeconfig registers capi_get_kubeconfig: a workload cluster's
+	// admin credentials leave the server. capi_backup_cluster checks its
+	// include_secrets against it too. Off by default and independent of
+	// ReadOnly; without it the tool is not offered and the client refuses
+	// the export.
+	ExposeKubeconfig bool
+
+	// Logger receives structured logs (default: slog.Default()).
+	Logger *slog.Logger
+}
+
+// WritePolicy is the capi.WritePolicy these options describe.
+func (o ServerOptions) WritePolicy() capi.WritePolicy {
+	return capi.WritePolicy{ReadOnly: o.ReadOnly, GitOpsGuard: o.GitOpsGuard, ExposeKubeconfig: o.ExposeKubeconfig}
 }
 
 // DefaultServerOptions returns ServerOptions with default values

@@ -1,0 +1,11 @@
+# Allow-listed gitleaks findings. Each entry is a fingerprint, as gitleaks
+# prints it, for a value that is not a credential.
+#
+# helm/mcp-capi/tests/oauth_secret_checksum_test.yaml asserts the rendered
+# content of the OAuth Secret, so the helm-unittest fixture spells out the
+# base64 of the dummy values the test passes in ("dex-secret-1", "key-1",
+# "valkey-1"). Nothing here is a real credential.
+e765f1c885effcf490fdb607917d46a0852e9bd4:helm/mcp-capi/tests/oauth_secret_checksum_test.yaml:generic-api-key:53
+e765f1c885effcf490fdb607917d46a0852e9bd4:helm/mcp-capi/tests/oauth_secret_checksum_test.yaml:generic-api-key:55
+helm/mcp-capi/tests/oauth_secret_checksum_test.yaml:generic-api-key:53
+helm/mcp-capi/tests/oauth_secret_checksum_test.yaml:generic-api-key:55

@@ -216,7 +216,7 @@ func CreateListClustersHandler(serverCtx *ServerContext) server.ToolHandlerFunc 
 			key := cluster.Namespace + "/" + cluster.Name
 			status, _ := capiClient.GetClusterStatusFromList(ctx, cluster, machinesByCluster[key])
 			if status != nil {
-				items = append(items, clusterSummary(status))
+				items = append(items, clusterListItem(status))
 			}
 		}
 
@@ -285,7 +285,7 @@ func CreateGetClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		for _, cluster := range matched.Items {
 			status, err := capiClient.GetClusterStatus(ctx, cluster.Namespace, cluster.Name)
 			if err == nil {
-				candidates = append(candidates, clusterSummary(status))
+				candidates = append(candidates, clusterListItem(status))
 			}
 		}
 
@@ -333,7 +333,6 @@ type clusterHealthResult struct {
 	WorkersReady        bool     `json:"workersReady"`
 	Issues              []string `json:"issues"`
 	Warnings            []string `json:"warnings"`
-	Recommendations     []string `json:"recommendations,omitempty"`
 }
 
 // CreateClusterHealthHandler creates a handler for checking cluster health
@@ -367,24 +366,6 @@ func CreateClusterHealthHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 			WorkersReady:        health.WorkersReady,
 			Issues:              nonNilStrings(health.Issues),
 			Warnings:            nonNilStrings(health.Warnings),
-		}
-
-		if !health.Healthy {
-			if !health.ControlPlaneReady {
-				result.Recommendations = append(result.Recommendations,
-					"Check control plane pods and logs",
-					"Verify API server connectivity")
-			}
-			if !health.InfraReady {
-				result.Recommendations = append(result.Recommendations,
-					"Check infrastructure provider status",
-					"Verify cloud resources are provisioned")
-			}
-			if !health.WorkersReady {
-				result.Recommendations = append(result.Recommendations,
-					"Check machine status with capi_list_machines",
-					"Review machine deployment events")
-			}
 		}
 
 		return jsonResult(result)
@@ -486,8 +467,13 @@ func CreateKubectlHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 
 		impersonateAs, _ := arguments["as"].(string)
 		stdin, _ := arguments["stdin"].(string)
+		limit, err := outputLimit(arguments)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
 
 		output, err := capiClient.ExecKubectl(ctx, namespace, clusterName, args, impersonateAs, stdin)
+		output = limitOutput(output, limit)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr(fmt.Sprintf("kubectl execution failed\noutput:\n%s", output), err), nil
 		}
@@ -539,7 +525,13 @@ func CreateHelmHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 			args = append(args, s)
 		}
 
+		limit, err := outputLimit(arguments)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
 		output, err := capiClient.ExecHelm(ctx, namespace, clusterName, args)
+		output = limitOutput(output, limit)
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr(fmt.Sprintf("helm execution failed\noutput:\n%s", output), err), nil
 		}
@@ -670,12 +662,11 @@ func CreateResumeClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 
 // deleteClusterResult is the result of capi_delete_cluster.
 type deleteClusterResult struct {
-	Namespace       string         `json:"namespace"`
-	Name            string         `json:"name"`
-	Deleted         bool           `json:"deleted"`
-	Cluster         ClusterSummary `json:"cluster"`
-	Message         string         `json:"message"`
-	Recommendations []string       `json:"recommendations,omitempty"`
+	Namespace string         `json:"namespace"`
+	Name      string         `json:"name"`
+	Deleted   bool           `json:"deleted"`
+	Cluster   ClusterSummary `json:"cluster"`
+	Message   string         `json:"message"`
 }
 
 // CreateDeleteClusterHandler creates a handler for deleting a cluster
@@ -712,11 +703,6 @@ func CreateDeleteClusterHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 		if !force && status.Ready {
 			result.Deleted = false
 			result.Message = "Safety check failed: the cluster is Ready and appears operational. Pass force=true to delete it anyway."
-			result.Recommendations = []string{
-				"Back up important data with velero; capi_backup_cluster exports none of the cluster's resources yet",
-				"Migrate workloads to another cluster",
-				"Confirm this is the intended cluster",
-			}
 			return jsonResult(result)
 		}
 

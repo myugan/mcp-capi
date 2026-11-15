@@ -201,11 +201,12 @@ func isConditionTrue(conditions clusterv1.Conditions, conditionType clusterv1.Co
 // keys removed. Keys under the cluster.x-k8s.io domain are set by the system
 // (for example the cluster-name label or the multi-kilobyte
 // cluster.x-k8s.io/conversion-data annotation the conversion webhook stores on
-// every object) and only add noise to a tool result.
+// every object) and only add noise to a tool result. So does kubectl's
+// last-applied-configuration annotation, a copy of the whole manifest.
 func UserMetadata(metadata map[string]string) map[string]string {
 	result := make(map[string]string)
 	for k, v := range metadata {
-		if !strings.Contains(k, "cluster.x-k8s.io") {
+		if !strings.Contains(k, "cluster.x-k8s.io") && k != corev1.LastAppliedConfigAnnotation {
 			result[k] = v
 		}
 	}

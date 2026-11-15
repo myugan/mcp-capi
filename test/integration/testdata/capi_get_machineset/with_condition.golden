@@ -1,1 +1,1 @@
-{"name":"cond-ms","namespace":"test-clusters","clusterName":"test-cluster","replicas":3,"currentReplicas":3,"readyReplicas":3,"availableReplicas":3,"template":{},"conditions":[{"type":"Ready","status":"True","reason":"MachinesReady","message":"All machines are ready"}]}
+{"name":"cond-ms","namespace":"test-clusters","clusterName":"test-cluster","replicas":3,"currentReplicas":3,"readyReplicas":3,"availableReplicas":3,"template":{},"healthyConditions":["Ready"]}

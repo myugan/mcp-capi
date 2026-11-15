@@ -33,8 +33,8 @@ type ProviderClusterDetail struct {
 	ControlPlaneReady   bool            `json:"controlPlaneReady"`
 	Infrastructure      ObjectRef       `json:"infrastructure"`
 	Network             *ClusterNetwork `json:"network,omitempty"`
-	Conditions          []Condition     `json:"conditions,omitempty"`
-	Note                string          `json:"note"`
+	ConditionDigest
+	Note string `json:"note"`
 }
 
 // hasInfrastructureKind reports whether the cluster's infrastructure reference
@@ -122,7 +122,7 @@ func createProviderGetClusterHandler(serverCtx *ServerContext, providerName, not
 			InfrastructureReady: cluster.Status.InfrastructureReady,
 			ControlPlaneReady:   cluster.Status.ControlPlaneReady,
 			Infrastructure:      *objectRef(cluster.Spec.InfrastructureRef),
-			Conditions:          capiConditions(cluster.Status.Conditions),
+			ConditionDigest:     capiConditions(cluster.Status.Conditions),
 			Note:                note,
 		}
 		if network := cluster.Spec.ClusterNetwork; network != nil {

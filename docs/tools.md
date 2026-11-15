@@ -216,7 +216,7 @@ A placeholder (giantswarm/mcp-capi#303): the answer carries no manifests and out
 ## `capi_cluster_health`
 
 ```text
-Check a CAPI cluster's health: control plane, infrastructure and workers, with issues and recommendations.
+Check a CAPI cluster's health: control plane, infrastructure, workers, and each machine that is not ready.
 
 Phase and conditions only: capi_cluster_status.
 ```
@@ -246,7 +246,7 @@ Phase and conditions only: capi_cluster_status.
 ```text
 Get a CAPI cluster's phase, readiness and conditions.
 
-Issues and recommendations: capi_cluster_health.
+Issues and warnings, with the machines that are not ready: capi_cluster_health.
 ```
 
 ```json
@@ -847,6 +847,10 @@ Cannot target the management cluster, and args cannot override the resolved kube
       "description": "Name of the workload cluster to run helm against",
       "type": "string"
     },
+    "max_output_bytes": {
+      "description": "Output size limit in bytes (default 24000). Longer output keeps its start and end and says how much was cut from the middle",
+      "type": "number"
+    },
     "namespace": {
       "description": "Namespace of the Cluster resource on the management cluster",
       "type": "string"
@@ -886,6 +890,10 @@ Cannot target the management cluster, and args cannot override the resolved kube
     "cluster_name": {
       "description": "Name of the workload cluster to run kubectl against",
       "type": "string"
+    },
+    "max_output_bytes": {
+      "description": "Output size limit in bytes (default 24000). Longer output keeps its start and end and says how much was cut from the middle",
+      "type": "number"
     },
     "namespace": {
       "description": "Namespace of the Cluster resource on the management cluster",

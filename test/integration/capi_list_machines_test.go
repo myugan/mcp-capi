@@ -172,4 +172,24 @@ func TestCapiListMachines(t *testing.T) {
 			AssertContent("with_node_ref.golden").
 			Execute()
 	})
+
+	t.Run("should say why a machine is not ready and nothing about a healthy one", func(t *testing.T) {
+		t.Parallel()
+		namespace := testNamespace
+
+		harness.New(t).
+			CreateNamespace(namespace).
+			CreateClusters(namespace, "mixed-cluster").
+			Machine(namespace, "mixed-machine-ok").ForCluster("mixed-cluster").WithPhase("Running").
+			WithCondition("Ready").True().Reason("MachineReady").Message("Machine is ready").Done().
+			Create().
+			Machine(namespace, "mixed-machine-stuck").ForCluster("mixed-cluster").WithPhase("Provisioning").
+			WithCondition("Ready").False().Reason("WaitingForBootstrapData").Message("bootstrap secret not found").Done().
+			WithCondition("InfrastructureReady").True().Done().
+			Create().
+			ToolCall("capi_list_machines").
+			WithArg("namespace", namespace).
+			AssertContent("with_problems.golden").
+			Execute()
+	})
 }

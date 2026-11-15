@@ -22,6 +22,8 @@ type MachineSummary struct {
 	ProviderID  string `json:"providerID,omitempty"`
 	Version     string `json:"version,omitempty"`
 	Ready       bool   `json:"ready"`
+	// Problems says why a machine is not ready; a healthy machine has none.
+	Problems []Condition `json:"problems,omitempty"`
 }
 
 // CreateListMachinesHandler creates a handler for listing CAPI machines as
@@ -53,6 +55,7 @@ func CreateListMachinesHandler(serverCtx *ServerContext) server.ToolHandlerFunc 
 				ClusterName: machine.Spec.ClusterName,
 				Phase:       machine.Status.Phase,
 				Ready:       machineReady(machine),
+				Problems:    capiConditions(machine.Status.Conditions).Problems,
 			}
 			if machine.Status.NodeRef != nil {
 				item.NodeName = machine.Status.NodeRef.Name
@@ -136,18 +139,18 @@ type NodeRef struct {
 
 // MachineDetail is the result of capi_get_machine.
 type MachineDetail struct {
-	Name           string      `json:"name"`
-	Namespace      string      `json:"namespace"`
-	ClusterName    string      `json:"clusterName,omitempty"`
-	Phase          string      `json:"phase,omitempty"`
-	Version        string      `json:"version,omitempty"`
-	ProviderID     string      `json:"providerID,omitempty"`
-	Ready          bool        `json:"ready"`
-	Node           *NodeRef    `json:"node,omitempty"`
-	Bootstrap      *ObjectRef  `json:"bootstrap,omitempty"`
-	Infrastructure *ObjectRef  `json:"infrastructure,omitempty"`
-	Addresses      []Address   `json:"addresses,omitempty"`
-	Conditions     []Condition `json:"conditions,omitempty"`
+	Name           string     `json:"name"`
+	Namespace      string     `json:"namespace"`
+	ClusterName    string     `json:"clusterName,omitempty"`
+	Phase          string     `json:"phase,omitempty"`
+	Version        string     `json:"version,omitempty"`
+	ProviderID     string     `json:"providerID,omitempty"`
+	Ready          bool       `json:"ready"`
+	Node           *NodeRef   `json:"node,omitempty"`
+	Bootstrap      *ObjectRef `json:"bootstrap,omitempty"`
+	Infrastructure *ObjectRef `json:"infrastructure,omitempty"`
+	Addresses      []Address  `json:"addresses,omitempty"`
+	ConditionDigest
 }
 
 // CreateGetMachineHandler creates a handler for getting detailed machine information
@@ -173,14 +176,14 @@ func CreateGetMachineHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		}
 
 		detail := MachineDetail{
-			Name:        machine.Name,
-			Namespace:   machine.Namespace,
-			ClusterName: machine.Spec.ClusterName,
-			Phase:       machine.Status.Phase,
-			Ready:       machineReady(machine),
-			Bootstrap:   objectRef(machine.Spec.Bootstrap.ConfigRef),
-			Addresses:   machineAddresses(machine.Status.Addresses),
-			Conditions:  capiConditions(machine.Status.Conditions),
+			Name:            machine.Name,
+			Namespace:       machine.Namespace,
+			ClusterName:     machine.Spec.ClusterName,
+			Phase:           machine.Status.Phase,
+			Ready:           machineReady(machine),
+			Bootstrap:       objectRef(machine.Spec.Bootstrap.ConfigRef),
+			Addresses:       machineAddresses(machine.Status.Addresses),
+			ConditionDigest: capiConditions(machine.Status.Conditions),
 		}
 		if machine.Spec.Version != nil {
 			detail.Version = *machine.Spec.Version
@@ -697,7 +700,7 @@ type MachineSetDetail struct {
 	FailureMessage    string          `json:"failureMessage,omitempty"`
 	Template          MachineTemplate `json:"template"`
 	Owners            []ObjectRef     `json:"owners,omitempty"`
-	Conditions        []Condition     `json:"conditions,omitempty"`
+	ConditionDigest
 }
 
 // CreateGetMachineSetHandler creates a handler for getting machine set details
@@ -729,7 +732,7 @@ func CreateGetMachineSetHandler(serverCtx *ServerContext) server.ToolHandlerFunc
 			CurrentReplicas:   ms.Status.Replicas,
 			ReadyReplicas:     ms.Status.ReadyReplicas,
 			AvailableReplicas: ms.Status.AvailableReplicas,
-			Conditions:        capiConditions(ms.Status.Conditions),
+			ConditionDigest:   capiConditions(ms.Status.Conditions),
 		}
 		if ms.Spec.Replicas != nil {
 			detail.Replicas = *ms.Spec.Replicas
@@ -917,9 +920,9 @@ type NodeStatus struct {
 	NodeInfo    NodeInfo      `json:"nodeInfo"`
 	Capacity    NodeResources `json:"capacity"`
 	Allocatable NodeResources `json:"allocatable"`
-	Conditions  []Condition   `json:"conditions,omitempty"`
-	Addresses   []Address     `json:"addresses,omitempty"`
-	Taints      []Taint       `json:"taints,omitempty"`
+	ConditionDigest
+	Addresses []Address `json:"addresses,omitempty"`
+	Taints    []Taint   `json:"taints,omitempty"`
 }
 
 // nodeResources converts a resource list into its digest; zero quantities are omitted.
@@ -981,10 +984,10 @@ func CreateNodeStatusHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 				KubeletVersion:          info.KubeletVersion,
 				Architecture:            info.Architecture,
 			},
-			Capacity:    nodeResources(node.Status.Capacity),
-			Allocatable: nodeResources(node.Status.Allocatable),
-			Conditions:  nodeConditions(node.Status.Conditions),
-			Addresses:   nodeAddresses(node.Status.Addresses),
+			Capacity:        nodeResources(node.Status.Capacity),
+			Allocatable:     nodeResources(node.Status.Allocatable),
+			ConditionDigest: nodeConditions(node.Status.Conditions),
+			Addresses:       nodeAddresses(node.Status.Addresses),
 		}
 		for _, taint := range node.Spec.Taints {
 			status.Taints = append(status.Taints, Taint{Key: taint.Key, Value: taint.Value, Effect: string(taint.Effect)})

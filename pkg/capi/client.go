@@ -1094,6 +1094,64 @@ type ClusterHealthStatus struct {
 	Warnings          []string
 }
 
+// maxNotReadyMachineIssues caps how many machines GetClusterHealth names one
+// by one.
+const maxNotReadyMachineIssues = 10
+
+// conditionIssue renders a condition that is not True as "Type: Message",
+// with the reason standing in for a missing message.
+func conditionIssue(condition clusterv1.Condition) string {
+	detail := condition.Message
+	if detail == "" {
+		detail = condition.Reason
+	}
+	if detail == "" {
+		detail = "status " + string(condition.Status)
+	}
+	return fmt.Sprintf("%s: %s", condition.Type, detail)
+}
+
+// machineNotReadyIssue says which machine is not ready and why: its phase and
+// the condition holding it back. The Ready condition summarises the machine's
+// other conditions, so it is preferred when it carries a reason or message;
+// otherwise the first condition that is not True is reported.
+func machineNotReadyIssue(machine *clusterv1.Machine) string {
+	issue := fmt.Sprintf("Machine %s is not ready", machine.Name)
+	if machine.Status.Phase != "" {
+		issue += fmt.Sprintf(" (phase %s)", machine.Status.Phase)
+	}
+
+	var cause *clusterv1.Condition
+	for i := range machine.Status.Conditions {
+		condition := &machine.Status.Conditions[i]
+		if condition.Status == corev1.ConditionTrue {
+			continue
+		}
+		if condition.Type == clusterv1.ReadyCondition {
+			if condition.Reason != "" || condition.Message != "" {
+				cause = condition
+				break
+			}
+			continue
+		}
+		if cause == nil {
+			cause = condition
+		}
+	}
+	if cause == nil {
+		return issue
+	}
+
+	issue += ": " + string(cause.Type)
+	if cause.Reason != "" {
+		issue += " " + cause.Reason
+	}
+	if cause.Message != "" {
+		issue += ": " + cause.Message
+	}
+	return issue
+}
+
 // GetClusterHealth checks the health of a cluster
 func (c *Client) GetClusterHealth(ctx context.Context, namespace, name string) (*ClusterHealthStatus, error) {
 	status, err := c.GetClusterStatus(ctx, namespace, name)
@@ -1124,22 +1182,29 @@ func (c *Client) GetClusterHealth(ctx context.Context, namespace, name string) (
 	// Check workers
 	machines, err := c.ListMachines(ctx, namespace, name)
 	if err == nil {
-		readyMachines := 0
 		totalMachines := len(machines.Items)
+		var notReady []string
 
-		for _, machine := range machines.Items {
-			for _, condition := range machine.Status.Conditions {
-				if condition.Type == clusterv1.ReadyCondition && condition.Status == corev1.ConditionTrue {
-					readyMachines++
-					break
-				}
+		for i := range machines.Items {
+			machine := &machines.Items[i]
+			if !isConditionTrue(machine.Status.Conditions, clusterv1.ReadyCondition) {
+				notReady = append(notReady, machineNotReadyIssue(machine))
 			}
 		}
+		readyMachines := totalMachines - len(notReady)
 
 		health.WorkersReady = readyMachines == totalMachines && totalMachines > 0
 		if !health.WorkersReady {
 			health.Healthy = false
 			health.Issues = append(health.Issues, fmt.Sprintf("Only %d/%d machines are ready", readyMachines, totalMachines))
+			// Name the machines, so the caller sees which one and why
+			// without a second call. A large cluster mid-rollout is capped.
+			if len(notReady) > maxNotReadyMachineIssues {
+				more := len(notReady) - maxNotReadyMachineIssues
+				notReady = append(notReady[:maxNotReadyMachineIssues],
+					fmt.Sprintf("%d more machines are not ready: list them with capi_list_machines", more))
+			}
+			health.Issues = append(health.Issues, notReady...)
 		}
 	}
 
@@ -1147,9 +1212,9 @@ func (c *Client) GetClusterHealth(ctx context.Context, namespace, name string) (
 	for _, condition := range status.Conditions {
 		if condition.Status != corev1.ConditionTrue && condition.Severity == clusterv1.ConditionSeverityError {
 			health.Healthy = false
-			health.Issues = append(health.Issues, fmt.Sprintf("%s: %s", condition.Type, condition.Message))
+			health.Issues = append(health.Issues, conditionIssue(condition))
 		} else if condition.Status != corev1.ConditionTrue && condition.Severity == clusterv1.ConditionSeverityWarning {
-			health.Warnings = append(health.Warnings, fmt.Sprintf("%s: %s", condition.Type, condition.Message))
+			health.Warnings = append(health.Warnings, conditionIssue(condition))
 		}
 	}
 

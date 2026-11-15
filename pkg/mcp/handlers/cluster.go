@@ -485,7 +485,7 @@ func CreateKubectlHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				mcp.TextContent{
-					Type: "text",
+					Type: textContentType,
 					Text: content.String(),
 				},
 			},
@@ -543,7 +543,7 @@ func CreateHelmHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				mcp.TextContent{
-					Type: "text",
+					Type: textContentType,
 					Text: content.String(),
 				},
 			},

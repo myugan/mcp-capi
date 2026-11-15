@@ -7,6 +7,13 @@ linters:
   enable:
     - gosec
     - goconst
+  settings:
+    goconst:
+      # Test code names the same cluster, namespace, version and argument key
+      # over and over by design -- a fixture reads better spelled out than
+      # behind a constant. Newer golangci-lint versions default this to true;
+      # setting it keeps the result the same whichever version runs.
+      ignore-tests: true
 
 issues:
   max-issues-per-linter: 0

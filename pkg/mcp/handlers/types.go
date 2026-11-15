@@ -14,6 +14,9 @@ import (
 const (
 	textContentType = "text"
 	infraAPIV1Beta1 = "infrastructure.cluster.x-k8s.io/v1beta1"
+	// schemaTypeKey is the JSON Schema keyword naming an array's item type,
+	// as passed to mcp.Items.
+	schemaTypeKey = "type"
 )
 
 // ErrNoCallerIdentity is returned by ServerContext.Client when the server acts

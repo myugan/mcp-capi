@@ -1,0 +1,1 @@
+{"items":[{"name":"mixed-machine-ok","namespace":"test-clusters","clusterName":"mixed-cluster","phase":"Running","ready":true},{"name":"mixed-machine-stuck","namespace":"test-clusters","clusterName":"mixed-cluster","phase":"Provisioning","ready":false,"problems":[{"type":"Ready","status":"False","reason":"WaitingForBootstrapData","message":"bootstrap secret not found"}]}]}

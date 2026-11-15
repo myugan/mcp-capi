@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	corev1 "k8s.io/api/core/v1"
@@ -50,12 +51,34 @@ type ObjectRef struct {
 	APIVersion string `json:"apiVersion,omitempty"`
 }
 
-// Condition is the digest of a CAPI or core Kubernetes condition.
+// Condition is one condition that is not in its healthy state, with what the
+// controller said about it.
 type Condition struct {
-	Type    string `json:"type"`
-	Status  string `json:"status"`
-	Reason  string `json:"reason,omitempty"`
-	Message string `json:"message,omitempty"`
+	Type     string `json:"type"`
+	Status   string `json:"status"`
+	Severity string `json:"severity,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+// ConditionDigest splits an object's conditions by health, so a reader sees
+// what is wrong without scanning what is fine. Problems carries every
+// condition that is not in its healthy state, in full. HealthyConditions
+// names the rest: their reason and message only restate the type ("kubelet
+// has sufficient memory available") and are left out.
+//
+// Both fields are omitted when empty, so an object without a problems field
+// has no unhealthy condition.
+type ConditionDigest struct {
+	Problems          []Condition `json:"problems,omitempty"`
+	HealthyConditions []string    `json:"healthyConditions,omitempty"`
+}
+
+// problemsOnly returns the digest without the healthy condition names, for
+// list items: a list is scanned for what is wrong, and one object's detail
+// tool names the healthy conditions.
+func (d ConditionDigest) problemsOnly() ConditionDigest {
+	return ConditionDigest{Problems: d.Problems}
 }
 
 // Address is a machine or node address.
@@ -79,7 +102,7 @@ type ClusterSummary struct {
 	ReadyMachines       int               `json:"readyMachines"`
 	Labels              map[string]string `json:"labels,omitempty"`
 	Annotations         map[string]string `json:"annotations,omitempty"`
-	Conditions          []Condition       `json:"conditions,omitempty"`
+	ConditionDigest
 }
 
 // clusterSummary converts a capi.ClusterStatus into its JSON digest. Labels
@@ -100,43 +123,128 @@ func clusterSummary(status *capi.ClusterStatus) ClusterSummary {
 		ReadyMachines:       status.ReadyMachines,
 		Labels:              capi.UserMetadata(status.Labels),
 		Annotations:         capi.UserMetadata(status.Annotations),
-		Conditions:          capiConditions(status.Conditions),
+		ConditionDigest:     capiConditions(status.Conditions),
 	}
 }
 
-// capiConditions converts CAPI conditions into their digest. Returns nil for
-// an empty input so the field is omitted.
-func capiConditions(conditions clusterv1.Conditions) []Condition {
-	if len(conditions) == 0 {
-		return nil
-	}
-	out := make([]Condition, 0, len(conditions))
+// clusterListItem is the ClusterSummary of a cluster listed among others:
+// without annotations and healthy condition names, which capi_get_cluster and
+// capi_cluster_status return for one cluster. Labels stay, the list tools
+// filter on them.
+func clusterListItem(status *capi.ClusterStatus) ClusterSummary {
+	summary := clusterSummary(status)
+	summary.Annotations = nil
+	summary.ConditionDigest = summary.problemsOnly()
+	return summary
+}
+
+// capiConditions digests CAPI conditions. Every v1beta1 CAPI condition is
+// healthy when True, so anything else (False or Unknown) is a problem.
+func capiConditions(conditions clusterv1.Conditions) ConditionDigest {
+	var digest ConditionDigest
 	for _, c := range conditions {
-		out = append(out, Condition{
+		if c.Status == corev1.ConditionTrue {
+			digest.HealthyConditions = append(digest.HealthyConditions, string(c.Type))
+			continue
+		}
+		digest.Problems = append(digest.Problems, Condition{
+			Type:     string(c.Type),
+			Status:   string(c.Status),
+			Severity: string(c.Severity),
+			Reason:   c.Reason,
+			Message:  c.Message,
+		})
+	}
+	return digest
+}
+
+// nodeConditions digests core Node conditions. Ready is healthy when True;
+// every other node condition (MemoryPressure, DiskPressure, PIDPressure,
+// NetworkUnavailable and those node-problem-detector adds) reports a fault
+// and is healthy when False. Because the healthy status differs by type, a
+// healthy node condition is named with it ("MemoryPressure=False"), so the
+// name alone is never read as the fault being present.
+func nodeConditions(conditions []corev1.NodeCondition) ConditionDigest {
+	var digest ConditionDigest
+	for _, c := range conditions {
+		healthy := corev1.ConditionFalse
+		if c.Type == corev1.NodeReady {
+			healthy = corev1.ConditionTrue
+		}
+		if c.Status == healthy {
+			digest.HealthyConditions = append(digest.HealthyConditions, fmt.Sprintf("%s=%s", c.Type, c.Status))
+			continue
+		}
+		digest.Problems = append(digest.Problems, Condition{
 			Type:    string(c.Type),
 			Status:  string(c.Status),
 			Reason:  c.Reason,
 			Message: c.Message,
 		})
 	}
-	return out
+	return digest
 }
 
-// nodeConditions converts core Node conditions into their digest.
-func nodeConditions(conditions []corev1.NodeCondition) []Condition {
-	if len(conditions) == 0 {
-		return nil
+// defaultMaxOutputBytes caps what capi_kubectl and capi_helm return when the
+// caller sets no max_output_bytes: roughly 6000 tokens, enough for a listing
+// of a few hundred objects or one object's manifest, far below a log dump.
+const defaultMaxOutputBytes = 24000
+
+// maxOutputBytesDescription documents the max_output_bytes parameter.
+const maxOutputBytesDescription = "Output size limit in bytes (default 24000). Longer output keeps its start and end " +
+	"and says how much was cut from the middle"
+
+// maxMaxOutputBytes is the highest max_output_bytes a caller may ask for.
+const maxMaxOutputBytes = 1000000
+
+// outputLimit reads the max_output_bytes argument: absent or zero means the
+// default, anything else must be a whole number up to maxMaxOutputBytes.
+func outputLimit(arguments map[string]any) (int, error) {
+	raw, ok := arguments["max_output_bytes"]
+	if !ok || raw == nil {
+		return defaultMaxOutputBytes, nil
 	}
-	out := make([]Condition, 0, len(conditions))
-	for _, c := range conditions {
-		out = append(out, Condition{
-			Type:    string(c.Type),
-			Status:  string(c.Status),
-			Reason:  c.Reason,
-			Message: c.Message,
-		})
+	n, ok := raw.(float64)
+	if !ok || n < 0 || n > maxMaxOutputBytes || n != float64(int(n)) {
+		return 0, fmt.Errorf("max_output_bytes must be a whole number from 1 to %d", maxMaxOutputBytes)
 	}
-	return out
+	if n == 0 {
+		return defaultMaxOutputBytes, nil
+	}
+	return int(n), nil
+}
+
+// limitOutput returns output unchanged when it fits in limit bytes. Otherwise
+// it keeps the start and the end -- a table's header and first rows, and the
+// last lines, where a command prints its error -- and replaces the middle
+// with one line that says how much is missing and how to get it. Cuts fall on
+// line boundaries when the output has lines to cut on.
+func limitOutput(output string, limit int) string {
+	if limit <= 0 || len(output) <= limit {
+		return output
+	}
+
+	half := limit / 2
+	head := output[:half]
+	if i := strings.LastIndexByte(head, '\n'); i >= 0 {
+		head = head[:i+1]
+	}
+	tail := output[len(output)-half:]
+	if i := strings.IndexByte(tail, '\n'); i >= 0 && i+1 < len(tail) {
+		tail = tail[i+1:]
+	}
+	// A cut that is not on a line boundary may split a UTF-8 sequence.
+	head = strings.ToValidUTF8(head, "")
+	tail = strings.ToValidUTF8(tail, "")
+
+	omitted := len(output) - len(head) - len(tail)
+	omittedLines := strings.Count(output[len(head):len(output)-len(tail)], "\n")
+	if head != "" && !strings.HasSuffix(head, "\n") {
+		head += "\n"
+	}
+	return head + fmt.Sprintf("[output truncated: %d of %d bytes (%d lines) omitted here. Narrow the command "+
+		"(a namespace, a label selector, --tail, --since, -o jsonpath or custom-columns) or raise max_output_bytes.]\n",
+		omitted, len(output), omittedLines) + tail
 }
 
 // machineAddresses converts CAPI machine addresses into their digest.

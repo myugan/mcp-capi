@@ -129,7 +129,7 @@ func TestCapiClusterHealth(t *testing.T) {
 			Execute()
 	})
 
-	t.Run("shows infra-specific recommendations when CP ready but infra not ready", func(t *testing.T) {
+	t.Run("reports infrastructure when CP ready but infra not ready", func(t *testing.T) {
 		t.Parallel()
 		namespace := testNamespace
 
@@ -146,7 +146,7 @@ func TestCapiClusterHealth(t *testing.T) {
 			Execute()
 	})
 
-	t.Run("shows CP-specific recommendations when CP not ready but infra ready", func(t *testing.T) {
+	t.Run("reports the control plane when CP not ready but infra ready", func(t *testing.T) {
 		t.Parallel()
 		namespace := testNamespace
 
@@ -163,7 +163,7 @@ func TestCapiClusterHealth(t *testing.T) {
 			Execute()
 	})
 
-	t.Run("shows only worker recommendations when CP and infra ready but no machines", func(t *testing.T) {
+	t.Run("reports only workers when CP and infra ready but no machines", func(t *testing.T) {
 		t.Parallel()
 		namespace := testNamespace
 
@@ -290,7 +290,7 @@ func TestCapiClusterHealth(t *testing.T) {
 			Execute()
 	})
 
-	t.Run("shows all recommendation sections when CP infra and workers are all not ready", func(t *testing.T) {
+	t.Run("names every machine when CP infra and workers are all not ready", func(t *testing.T) {
 		t.Parallel()
 		namespace := testNamespace
 
@@ -304,7 +304,30 @@ func TestCapiClusterHealth(t *testing.T) {
 			ToolCall("capi_cluster_health").
 			WithArg("namespace", namespace).
 			WithArg("name", "all-unhealthy").
-			AssertContent("all_recommendations.golden").
+			AssertContent("all_not_ready.golden").
+			Execute()
+	})
+
+	t.Run("names the machine that is not ready with its reason", func(t *testing.T) {
+		t.Parallel()
+		namespace := testNamespace
+
+		harness.New(t).
+			CreateNamespace(namespace).
+			Cluster(namespace, "one-stuck").WithProvider("aws").WithPhase("Provisioned").
+			WithControlPlaneReady(true).
+			WithInfraReady(true).
+			Create().
+			Machine(namespace, "one-stuck-ok").ForCluster("one-stuck").WithPhase("Running").
+			WithCondition("Ready").True().Done().
+			Create().
+			Machine(namespace, "one-stuck-bad").ForCluster("one-stuck").WithPhase("Provisioning").
+			WithCondition("Ready").False().Reason("WaitingForBootstrapData").Message("bootstrap secret not found").Done().
+			Create().
+			ToolCall("capi_cluster_health").
+			WithArg("namespace", namespace).
+			WithArg("name", "one-stuck").
+			AssertContent("machine_not_ready_reason.golden").
 			Execute()
 	})
 

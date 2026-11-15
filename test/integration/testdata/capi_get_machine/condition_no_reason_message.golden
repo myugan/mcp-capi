@@ -1,1 +1,1 @@
-{"name":"sparse-machine","namespace":"test-clusters","clusterName":"sparse-cluster","phase":"Running","ready":true,"conditions":[{"type":"Ready","status":"True"},{"type":"InfrastructureReady","status":"False"}]}
+{"name":"sparse-machine","namespace":"test-clusters","clusterName":"sparse-cluster","phase":"Running","ready":true,"problems":[{"type":"InfrastructureReady","status":"False"}],"healthyConditions":["Ready"]}

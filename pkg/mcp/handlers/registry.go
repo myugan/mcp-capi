@@ -149,7 +149,7 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			"capi_cluster_status",
 			tooldesc.Describe(
 				"Get a CAPI cluster's phase, readiness and conditions.",
-				"Issues and recommendations: capi_cluster_health.",
+				"Issues and warnings, with the machines that are not ready: capi_cluster_health.",
 			),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the cluster")),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Name of the cluster")),
@@ -162,7 +162,7 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 		Tool: mcp.NewTool(
 			"capi_cluster_health",
 			tooldesc.Describe(
-				"Check a CAPI cluster's health: control plane, infrastructure and workers, with issues and recommendations.",
+				"Check a CAPI cluster's health: control plane, infrastructure, workers, and each machine that is not ready.",
 				"Phase and conditions only: capi_cluster_status.",
 			),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the cluster")),
@@ -218,6 +218,7 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			mcp.WithArray("args", mcp.Required(), mcp.Description("kubectl arguments, e.g. [\"get\", \"pods\", \"-A\"] or [\"apply\", \"-f\", \"-\"] (with stdin set)"), mcp.Items(map[string]any{"type": "string"})),
 			mcp.WithString("as", mcp.Description("Optional username to impersonate via kubectl's --as flag, e.g. for testing another user's RBAC against the resolved workload cluster")),
 			mcp.WithString("stdin", mcp.Description("Content piped to the kubectl process's stdin, e.g. a manifest YAML for [\"apply\", \"-f\", \"-\"]")),
+			mcp.WithNumber("max_output_bytes", mcp.Description(maxOutputBytesDescription)),
 		),
 		Handler: CreateKubectlHandler(serverCtx),
 	})
@@ -233,6 +234,7 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the Cluster resource on the management cluster")),
 			mcp.WithString("cluster_name", mcp.Required(), mcp.Description("Name of the workload cluster to run helm against")),
 			mcp.WithArray("args", mcp.Required(), mcp.Description("helm arguments, e.g. [\"list\", \"-A\"] or [\"install\", \"cilium\", \"cilium/cilium\", \"--namespace\", \"kube-system\", \"--values\", \"-\"]"), mcp.Items(map[string]any{"type": "string"})),
+			mcp.WithNumber("max_output_bytes", mcp.Description(maxOutputBytesDescription)),
 		),
 		Handler: CreateHelmHandler(serverCtx),
 	})

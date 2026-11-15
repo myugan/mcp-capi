@@ -15,7 +15,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
 # the current CA bundle from alpine's ca-certificates, and the giantswarm user
 # (UID/GID 1000, as the chart's security context sets) that the scratch image
 # names.
-FROM --platform=$BUILDPLATFORM gsoci.azurecr.io/giantswarm/alpine:3.24.3 AS certs
+FROM --platform=$BUILDPLATFORM gsoci.azurecr.io/giantswarm/alpine:3.24.4 AS certs
 RUN apk add --no-cache ca-certificates \
  && addgroup -g 1000 giantswarm \
  && adduser -D -H -u 1000 -G giantswarm -s /sbin/nologin giantswarm

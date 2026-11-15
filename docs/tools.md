@@ -830,7 +830,7 @@ The provider list: capi_list_infrastructure_providers.
 ```text
 Run a helm command against a CAPI workload cluster's own API server, resolving that cluster's kubeconfig.
 
-Cannot target the management cluster, and args cannot override the resolved kubeconfig, context, server or credentials.
+Cannot target the management cluster, and args cannot override the resolved kubeconfig, context, server or credentials. There is no local filesystem to read a values file from: pass "--values", "-" in args and the YAML as stdin. A failed command is an error that starts with the exit code and stderr.
 ```
 
 ```json
@@ -854,6 +854,14 @@ Cannot target the management cluster, and args cannot override the resolved kube
     "namespace": {
       "description": "Namespace of the Cluster resource on the management cluster",
       "type": "string"
+    },
+    "stdin": {
+      "description": "Content piped to the helm process's stdin, e.g. values YAML for [\"--values\", \"-\"]",
+      "type": "string"
+    },
+    "timeout_seconds": {
+      "description": "Seconds before the command is stopped (default 120, max 600). One that follows or watches is stopped then, with what it printed",
+      "type": "number"
     }
   },
   "required": [
@@ -870,7 +878,7 @@ Cannot target the management cluster, and args cannot override the resolved kube
 ```text
 Run a kubectl command against a CAPI workload cluster's own API server, resolving that cluster's kubeconfig.
 
-Cannot target the management cluster, and args cannot override the resolved kubeconfig, context, server or credentials. Impersonate a user with the as parameter, not args, e.g. to test RBAC. There is no local filesystem to read a file from: to apply or create from content, end args in a literal "-" (e.g. ["apply", "-f", "-"]) and pass the content as stdin.
+Cannot target the management cluster, and args cannot override the resolved kubeconfig, context, server or credentials. Impersonate a user with the as parameter, not args, e.g. to test RBAC. There is no local filesystem to read a file from: to apply or create from content, end args in a literal "-" (e.g. ["apply", "-f", "-"]) and pass the content as stdin. A failure is an error starting with the exit code and stderr. get -o yaml or json omits the last-applied-configuration annotation.
 ```
 
 ```json
@@ -902,6 +910,10 @@ Cannot target the management cluster, and args cannot override the resolved kube
     "stdin": {
       "description": "Content piped to the kubectl process's stdin, e.g. a manifest YAML for [\"apply\", \"-f\", \"-\"]",
       "type": "string"
+    },
+    "timeout_seconds": {
+      "description": "Seconds before the command is stopped (default 120, max 600). One that follows or watches is stopped then, with what it printed",
+      "type": "number"
     }
   },
   "required": [

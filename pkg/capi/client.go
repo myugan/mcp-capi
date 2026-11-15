@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -431,8 +430,9 @@ func (c *Client) readKubeconfig(ctx context.Context, namespace, clusterName stri
 var kubectlBinaryPath = "/usr/local/bin/kubectl"
 
 // helmBinaryPath is the absolute path to the helm binary baked into the
-// container image, for the same reason as kubectlBinaryPath above.
-const helmBinaryPath = "/usr/local/bin/helm"
+// container image, for the same reason as kubectlBinaryPath above, and a var
+// for the same reason too.
+var helmBinaryPath = "/usr/local/bin/helm"
 
 // kubeconfigFlag points a kubectl or helm invocation at the temp kubeconfig
 // resolved here, and is also one of the flags a caller may not pass.
@@ -525,26 +525,29 @@ func (c *Client) resolveWorkloadKubeconfigFile(ctx context.Context, namespace, c
 // the only way to set --as: the flag remains in blockedKubectlFlags so it
 // cannot be smuggled in through args.
 //
-// stdin, when non-empty, is piped to the kubectl process -- there is no
+// opts.Stdin, when non-empty, is piped to the kubectl process -- there is no
 // local filesystem for this tool to read a file from, so this is how
 // content reaches flags like "-f -" or "-o json | kubectl apply -f -"
 // equivalents (e.g. args=["apply", "-f", "-"], stdin=<manifest YAML>).
-func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string, args []string, impersonateAs, stdin string) (string, error) {
+//
+// An error means kubectl did not run. Once it ran, the result says how it
+// ended: a non-zero exit or a timeout is in the ExecResult, with the output.
+func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string, args []string, impersonateAs string, opts ExecOptions) (*ExecResult, error) {
 	if len(args) == 0 {
-		return "", fmt.Errorf("at least one kubectl argument is required")
+		return nil, fmt.Errorf("at least one kubectl argument is required")
 	}
 
 	for _, a := range args {
 		for _, blocked := range blockedKubectlFlags {
 			if a == blocked || strings.HasPrefix(a, blocked+"=") {
-				return "", fmt.Errorf("argument %q is not allowed: it would override the resolved target cluster", a)
+				return nil, fmt.Errorf("argument %q is not allowed: it would override the resolved target cluster", a)
 			}
 		}
 	}
 
 	tmpPath, cleanup, err := c.resolveWorkloadKubeconfigFile(ctx, namespace, clusterName)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer cleanup()
 
@@ -553,19 +556,7 @@ func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string,
 		kubectlArgs = append(kubectlArgs, "--as", impersonateAs)
 	}
 	kubectlArgs = append(kubectlArgs, args...)
-	// #nosec G204 -- kubectlBinaryPath is this package's fixed path to the
-	// binary in the image, and every element of args was checked against
-	// blockedKubectlFlags above; the kubeconfig is the one resolved here.
-	cmd := exec.CommandContext(ctx, kubectlBinaryPath, kubectlArgs...)
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
-	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(output), fmt.Errorf("kubectl command failed for cluster %s: %w", clusterName, err)
-	}
-
-	return string(output), nil
+	return runCLI(ctx, kubectlBinaryPath, kubectlArgs, opts)
 }
 
 // ExecHelm dynamically resolves the given workload cluster's kubeconfig and
@@ -574,37 +565,29 @@ func (c *Client) ExecKubectl(ctx context.Context, namespace, clusterName string,
 // default/in-cluster kubeconfig: if resolution fails, if any argument
 // attempts to redirect helm at a different target, or if the resolved
 // server host matches the management cluster's own API host, the call is
-// refused before helm ever runs.
-func (c *Client) ExecHelm(ctx context.Context, namespace, clusterName string, args []string) (string, error) {
+// refused before helm ever runs. opts and the result are those of
+// ExecKubectl; opts.Stdin is what "--values -" reads.
+func (c *Client) ExecHelm(ctx context.Context, namespace, clusterName string, args []string, opts ExecOptions) (*ExecResult, error) {
 	if len(args) == 0 {
-		return "", fmt.Errorf("at least one helm argument is required")
+		return nil, fmt.Errorf("at least one helm argument is required")
 	}
 
 	for _, a := range args {
 		for _, blocked := range blockedHelmFlags {
 			if a == blocked || strings.HasPrefix(a, blocked+"=") {
-				return "", fmt.Errorf("argument %q is not allowed: it would override the resolved target cluster", a)
+				return nil, fmt.Errorf("argument %q is not allowed: it would override the resolved target cluster", a)
 			}
 		}
 	}
 
 	tmpPath, cleanup, err := c.resolveWorkloadKubeconfigFile(ctx, namespace, clusterName)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer cleanup()
 
 	helmArgs := append([]string{kubeconfigFlag, tmpPath}, args...)
-	// #nosec G204 -- helmBinaryPath is this package's fixed path to the binary
-	// in the image, and every element of args was checked against
-	// blockedHelmFlags above; the kubeconfig is the one resolved here.
-	cmd := exec.CommandContext(ctx, helmBinaryPath, helmArgs...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(output), fmt.Errorf("helm command failed for cluster %s: %w", clusterName, err)
-	}
-
-	return string(output), nil
+	return runCLI(ctx, helmBinaryPath, helmArgs, opts)
 }
 
 // PauseCluster pauses reconciliation for a cluster by adding the cluster.x-k8s.io/paused annotation

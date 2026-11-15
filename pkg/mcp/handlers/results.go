@@ -220,16 +220,22 @@ func outputLimit(arguments map[string]any) (int, error) {
 // with one line that says how much is missing and how to get it. Cuts fall on
 // line boundaries when the output has lines to cut on.
 func limitOutput(output string, limit int) string {
+	return limitOutputAt(output, limit, 50)
+}
+
+// limitOutputAt is limitOutput with the share of the limit, in percent, that
+// goes to the start of the output; the rest goes to its end.
+func limitOutputAt(output string, limit, headPercent int) string {
 	if limit <= 0 || len(output) <= limit {
 		return output
 	}
 
-	half := limit / 2
-	head := output[:half]
+	headBytes := limit * headPercent / 100
+	head := output[:headBytes]
 	if i := strings.LastIndexByte(head, '\n'); i >= 0 {
 		head = head[:i+1]
 	}
-	tail := output[len(output)-half:]
+	tail := output[len(output)-(limit-headBytes):]
 	if i := strings.IndexByte(tail, '\n'); i >= 0 && i+1 < len(tail) {
 		tail = tail[i+1:]
 	}

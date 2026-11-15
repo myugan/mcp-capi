@@ -211,7 +211,8 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 				"Cannot target the management cluster, and args cannot override the resolved kubeconfig, context, server or credentials. "+
 					"Impersonate a user with the as parameter, not args, e.g. to test RBAC. There is no local filesystem to read a file "+
 					"from: to apply or create from content, end args in a literal \"-\" (e.g. [\"apply\", \"-f\", \"-\"]) and pass the "+
-					"content as stdin.",
+					"content as stdin. A failure is an error starting with the exit code and stderr. "+
+					"get -o yaml or json omits the last-applied-configuration annotation.",
 			),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the Cluster resource on the management cluster")),
 			mcp.WithString("cluster_name", mcp.Required(), mcp.Description("Name of the workload cluster to run kubectl against")),
@@ -219,6 +220,7 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			mcp.WithString("as", mcp.Description("Optional username to impersonate via kubectl's --as flag, e.g. for testing another user's RBAC against the resolved workload cluster")),
 			mcp.WithString("stdin", mcp.Description("Content piped to the kubectl process's stdin, e.g. a manifest YAML for [\"apply\", \"-f\", \"-\"]")),
 			mcp.WithNumber("max_output_bytes", mcp.Description(maxOutputBytesDescription)),
+			mcp.WithNumber("timeout_seconds", mcp.Description(timeoutSecondsDescription)),
 		),
 		Handler: CreateKubectlHandler(serverCtx),
 	})
@@ -229,12 +231,16 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			"capi_helm",
 			tooldesc.Describe(
 				"Run a helm command against a CAPI workload cluster's own API server, resolving that cluster's kubeconfig.",
-				"Cannot target the management cluster, and args cannot override the resolved kubeconfig, context, server or credentials.",
+				"Cannot target the management cluster, and args cannot override the resolved kubeconfig, context, server or credentials. "+
+					"There is no local filesystem to read a values file from: pass \"--values\", \"-\" in args and the YAML as stdin. "+
+					"A failed command is an error that starts with the exit code and stderr.",
 			),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the Cluster resource on the management cluster")),
 			mcp.WithString("cluster_name", mcp.Required(), mcp.Description("Name of the workload cluster to run helm against")),
 			mcp.WithArray("args", mcp.Required(), mcp.Description("helm arguments, e.g. [\"list\", \"-A\"] or [\"install\", \"cilium\", \"cilium/cilium\", \"--namespace\", \"kube-system\", \"--values\", \"-\"]"), mcp.Items(map[string]any{schemaTypeKey: "string"})),
+			mcp.WithString("stdin", mcp.Description("Content piped to the helm process's stdin, e.g. values YAML for [\"--values\", \"-\"]")),
 			mcp.WithNumber("max_output_bytes", mcp.Description(maxOutputBytesDescription)),
+			mcp.WithNumber("timeout_seconds", mcp.Description(timeoutSecondsDescription)),
 		),
 		Handler: CreateHelmHandler(serverCtx),
 	})

@@ -99,19 +99,19 @@ func TestExecKubectlPipesStdin(t *testing.T) {
 	manifest := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: mammoth\n"
 
 	output, err := c.ExecKubectl(context.Background(), "default", "timbernetes",
-		[]string{"apply", "-f", "-"}, "", manifest)
+		[]string{"apply", "-f", "-"}, "", ExecOptions{Stdin: manifest})
 	if err != nil {
-		t.Fatalf("ExecKubectl failed: %v (output: %s)", err, output)
+		t.Fatalf("ExecKubectl failed: %v (output: %s)", err, stdoutOf(output))
 	}
 
-	if !strings.Contains(output, "ARGS: --kubeconfig") {
-		t.Errorf("expected kubectl to be invoked with --kubeconfig, got: %s", output)
+	if !strings.Contains(stdoutOf(output), "ARGS: --kubeconfig") {
+		t.Errorf("expected kubectl to be invoked with --kubeconfig, got: %s", stdoutOf(output))
 	}
-	if !strings.Contains(output, "apply -f -") {
-		t.Errorf("expected args to be forwarded verbatim, got: %s", output)
+	if !strings.Contains(stdoutOf(output), "apply -f -") {
+		t.Errorf("expected args to be forwarded verbatim, got: %s", stdoutOf(output))
 	}
-	if !strings.Contains(output, "STDIN-BEGIN\n"+manifest+"STDIN-END") {
-		t.Errorf("expected manifest on kubectl's stdin, got: %s", output)
+	if !strings.Contains(stdoutOf(output), "STDIN-BEGIN\n"+manifest+"STDIN-END") {
+		t.Errorf("expected manifest on kubectl's stdin, got: %s", stdoutOf(output))
 	}
 }
 
@@ -122,13 +122,13 @@ func TestExecKubectlEmptyStdinDoesNotHang(t *testing.T) {
 	c := newKubectlTestClient(t, "default", "timbernetes")
 
 	output, err := c.ExecKubectl(context.Background(), "default", "timbernetes",
-		[]string{"get", "pods", "-A"}, "", "")
+		[]string{"get", "pods", "-A"}, "", ExecOptions{})
 	if err != nil {
-		t.Fatalf("ExecKubectl failed: %v (output: %s)", err, output)
+		t.Fatalf("ExecKubectl failed: %v (output: %s)", err, stdoutOf(output))
 	}
 
-	if !strings.Contains(output, "STDIN-BEGIN\nSTDIN-END") {
-		t.Errorf("expected empty stdin, got: %s", output)
+	if !strings.Contains(stdoutOf(output), "STDIN-BEGIN\nSTDIN-END") {
+		t.Errorf("expected empty stdin, got: %s", stdoutOf(output))
 	}
 }
 
@@ -139,13 +139,13 @@ func TestExecKubectlImpersonationFlag(t *testing.T) {
 	c := newKubectlTestClient(t, "default", "timbernetes")
 
 	output, err := c.ExecKubectl(context.Background(), "default", "timbernetes",
-		[]string{"auth", "can-i", "--list"}, "grug@example.com", "")
+		[]string{"auth", "can-i", "--list"}, "grug@example.com", ExecOptions{})
 	if err != nil {
-		t.Fatalf("ExecKubectl failed: %v (output: %s)", err, output)
+		t.Fatalf("ExecKubectl failed: %v (output: %s)", err, stdoutOf(output))
 	}
 
-	if !strings.Contains(output, "--as grug@example.com auth can-i --list") {
-		t.Errorf("expected --as before caller args, got: %s", output)
+	if !strings.Contains(stdoutOf(output), "--as grug@example.com auth can-i --list") {
+		t.Errorf("expected --as before caller args, got: %s", stdoutOf(output))
 	}
 }
 
@@ -162,7 +162,7 @@ func TestExecKubectlRejectsBlockedFlags(t *testing.T) {
 		{"auth", "can-i", "--list", "--as", "system:masters"},
 		{"get", "pods", "--token=stolen"},
 	} {
-		if _, err := c.ExecKubectl(context.Background(), "default", "timbernetes", args, "", "manifest"); err == nil {
+		if _, err := c.ExecKubectl(context.Background(), "default", "timbernetes", args, "", ExecOptions{Stdin: "manifest"}); err == nil {
 			t.Errorf("expected %v to be rejected, got no error", args)
 		}
 	}
@@ -173,7 +173,7 @@ func TestExecKubectlRequiresArgs(t *testing.T) {
 	stubKubectl(t)
 	c := newKubectlTestClient(t, "default", "timbernetes")
 
-	if _, err := c.ExecKubectl(context.Background(), "default", "timbernetes", nil, "", "manifest"); err == nil {
+	if _, err := c.ExecKubectl(context.Background(), "default", "timbernetes", nil, "", ExecOptions{Stdin: "manifest"}); err == nil {
 		t.Error("expected empty args to be rejected, got no error")
 	}
 }
@@ -185,11 +185,11 @@ func TestExecKubectlUnknownClusterNeverRunsKubectl(t *testing.T) {
 	c := newKubectlTestClient(t, "default", "timbernetes")
 
 	output, err := c.ExecKubectl(context.Background(), "default", "no-such-cluster",
-		[]string{"get", "pods"}, "", "")
+		[]string{"get", "pods"}, "", ExecOptions{})
 	if err == nil {
 		t.Fatal("expected unknown cluster to be rejected, got no error")
 	}
-	if strings.Contains(output, "ARGS:") {
-		t.Errorf("kubectl should not have run, got: %s", output)
+	if strings.Contains(stdoutOf(output), "ARGS:") {
+		t.Errorf("kubectl should not have run, got: %s", stdoutOf(output))
 	}
 }

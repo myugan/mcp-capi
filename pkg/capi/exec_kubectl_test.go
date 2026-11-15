@@ -78,6 +78,8 @@ func stubKubectl(t *testing.T) {
 
 	script := filepath.Join(t.TempDir(), "kubectl")
 	body := "#!/bin/sh\necho \"ARGS: $*\"\necho \"STDIN-BEGIN\"\ncat\necho \"STDIN-END\"\n"
+	// #nosec G306 -- the stub stands in for the kubectl binary, so it has to
+	// be executable; it lives in the test's own temp dir.
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatalf("failed to write stub kubectl: %v", err)
 	}

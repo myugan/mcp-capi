@@ -105,7 +105,7 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			mcp.WithArray("machine_deployments",
 				mcp.Description("Worker machine deployments, e.g. [{\"class\": \"default-worker\", \"name\": \"md-0\", \"replicas\": 2, "+
 					"\"variables\": {\"instance\": {...}}}]"),
-				mcp.Items(map[string]any{"type": "object"}),
+				mcp.Items(map[string]any{schemaTypeKey: "object"}),
 			),
 			mcp.WithObject("variables", mcp.Description("Variable values required by the ClusterClass -- names and shapes must match the ClusterClass's variable schemas")),
 			mcp.WithObject("cluster_network", mcp.Description("Optional spec.clusterNetwork, e.g. "+
@@ -215,7 +215,7 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the Cluster resource on the management cluster")),
 			mcp.WithString("cluster_name", mcp.Required(), mcp.Description("Name of the workload cluster to run kubectl against")),
-			mcp.WithArray("args", mcp.Required(), mcp.Description("kubectl arguments, e.g. [\"get\", \"pods\", \"-A\"] or [\"apply\", \"-f\", \"-\"] (with stdin set)"), mcp.Items(map[string]any{"type": "string"})),
+			mcp.WithArray("args", mcp.Required(), mcp.Description("kubectl arguments, e.g. [\"get\", \"pods\", \"-A\"] or [\"apply\", \"-f\", \"-\"] (with stdin set)"), mcp.Items(map[string]any{schemaTypeKey: "string"})),
 			mcp.WithString("as", mcp.Description("Optional username to impersonate via kubectl's --as flag, e.g. for testing another user's RBAC against the resolved workload cluster")),
 			mcp.WithString("stdin", mcp.Description("Content piped to the kubectl process's stdin, e.g. a manifest YAML for [\"apply\", \"-f\", \"-\"]")),
 		),
@@ -232,7 +232,7 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the Cluster resource on the management cluster")),
 			mcp.WithString("cluster_name", mcp.Required(), mcp.Description("Name of the workload cluster to run helm against")),
-			mcp.WithArray("args", mcp.Required(), mcp.Description("helm arguments, e.g. [\"list\", \"-A\"] or [\"install\", \"cilium\", \"cilium/cilium\", \"--namespace\", \"kube-system\", \"--values\", \"-\"]"), mcp.Items(map[string]any{"type": "string"})),
+			mcp.WithArray("args", mcp.Required(), mcp.Description("helm arguments, e.g. [\"list\", \"-A\"] or [\"install\", \"cilium\", \"cilium/cilium\", \"--namespace\", \"kube-system\", \"--values\", \"-\"]"), mcp.Items(map[string]any{schemaTypeKey: "string"})),
 		),
 		Handler: CreateHelmHandler(serverCtx),
 	})

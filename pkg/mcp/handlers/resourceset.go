@@ -36,7 +36,7 @@ func buildResourceSetTools(serverCtx *ServerContext) []ToolRegistration {
 				mcp.Description("Label key-value pairs a Cluster must have to receive these resources, e.g. {\"capn.cluster.x-k8s.io/deploy-kube-flannel\": \"true\"}")),
 			mcp.WithArray("resources", mcp.Required(),
 				mcp.Description("Resources to apply, e.g. [{\"kind\": \"ConfigMap\", \"name\": \"timbernetes-kube-flannel\", \"data\": {\"cni.yaml\": \"<manifest YAML>\"}}]"),
-				mcp.Items(map[string]any{"type": "object"}),
+				mcp.Items(map[string]any{schemaTypeKey: "object"}),
 			),
 			mcp.WithString("strategy", mcp.Description("ApplyOnce (default) or Reconcile")),
 		),
@@ -180,7 +180,7 @@ func CreateCreateClusterResourceSetHandler(serverCtx *ServerContext) server.Tool
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				mcp.TextContent{Type: "text", Text: content.String()},
+				mcp.TextContent{Type: textContentType, Text: content.String()},
 			},
 		}, nil
 	}
@@ -212,7 +212,7 @@ func CreateListClusterResourceSetsHandler(serverCtx *ServerContext) server.ToolH
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				mcp.TextContent{Type: "text", Text: content.String()},
+				mcp.TextContent{Type: textContentType, Text: content.String()},
 			},
 		}, nil
 	}
@@ -255,7 +255,7 @@ func CreateGetClusterResourceSetHandler(serverCtx *ServerContext) server.ToolHan
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				mcp.TextContent{Type: "text", Text: content.String()},
+				mcp.TextContent{Type: textContentType, Text: content.String()},
 			},
 		}, nil
 	}
@@ -284,7 +284,7 @@ func CreateDeleteClusterResourceSetHandler(serverCtx *ServerContext) server.Tool
 
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				mcp.TextContent{Type: "text", Text: fmt.Sprintf("ClusterResourceSet %s/%s deleted.\n", namespace, name)},
+				mcp.TextContent{Type: textContentType, Text: fmt.Sprintf("ClusterResourceSet %s/%s deleted.\n", namespace, name)},
 			},
 		}, nil
 	}

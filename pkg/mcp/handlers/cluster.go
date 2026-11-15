@@ -451,45 +451,17 @@ func CreateKubectlHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		if !ok || clusterName == "" {
 			return mcp.NewToolResultError("cluster_name argument is required"), nil
 		}
-
-		rawArgs, ok := arguments["args"].([]interface{})
-		if !ok || len(rawArgs) == 0 {
-			return mcp.NewToolResultError("args argument is required and must be a non-empty array of strings"), nil
-		}
-		args := make([]string, 0, len(rawArgs))
-		for _, a := range rawArgs {
-			s, ok := a.(string)
-			if !ok {
-				return mcp.NewToolResultError("all elements of args must be strings"), nil
-			}
-			args = append(args, s)
-		}
-
-		impersonateAs, _ := arguments["as"].(string)
-		stdin, _ := arguments["stdin"].(string)
-		limit, err := outputLimit(arguments)
+		args, opts, limit, err := execArguments(arguments)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
+		impersonateAs, _ := arguments["as"].(string)
 
-		output, err := capiClient.ExecKubectl(ctx, namespace, clusterName, args, impersonateAs, stdin)
-		output = limitOutput(output, limit)
+		result, err := capiClient.ExecKubectl(ctx, namespace, clusterName, args, impersonateAs, opts)
 		if err != nil {
-			return mcp.NewToolResultErrorFromErr(fmt.Sprintf("kubectl execution failed\noutput:\n%s", output), err), nil
+			return mcp.NewToolResultErrorFromErr("kubectl was not run", err), nil
 		}
-
-		var content strings.Builder
-		fmt.Fprintf(&content, "kubectl %s against cluster %s:\n\n", strings.Join(args, " "), clusterName)
-		content.WriteString(output)
-
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				mcp.TextContent{
-					Type: textContentType,
-					Text: content.String(),
-				},
-			},
-		}, nil
+		return execResult("kubectl", result, kubectlStdout(args, result.Stdout, limit), limit), nil
 	}
 }
 
@@ -511,43 +483,16 @@ func CreateHelmHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		if !ok || clusterName == "" {
 			return mcp.NewToolResultError("cluster_name argument is required"), nil
 		}
-
-		rawArgs, ok := arguments["args"].([]interface{})
-		if !ok || len(rawArgs) == 0 {
-			return mcp.NewToolResultError("args argument is required and must be a non-empty array of strings"), nil
-		}
-		args := make([]string, 0, len(rawArgs))
-		for _, a := range rawArgs {
-			s, ok := a.(string)
-			if !ok {
-				return mcp.NewToolResultError("all elements of args must be strings"), nil
-			}
-			args = append(args, s)
-		}
-
-		limit, err := outputLimit(arguments)
+		args, opts, limit, err := execArguments(arguments)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 
-		output, err := capiClient.ExecHelm(ctx, namespace, clusterName, args)
-		output = limitOutput(output, limit)
+		result, err := capiClient.ExecHelm(ctx, namespace, clusterName, args, opts)
 		if err != nil {
-			return mcp.NewToolResultErrorFromErr(fmt.Sprintf("helm execution failed\noutput:\n%s", output), err), nil
+			return mcp.NewToolResultErrorFromErr("helm was not run", err), nil
 		}
-
-		var content strings.Builder
-		fmt.Fprintf(&content, "helm %s against cluster %s:\n\n", strings.Join(args, " "), clusterName)
-		content.WriteString(output)
-
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				mcp.TextContent{
-					Type: textContentType,
-					Text: content.String(),
-				},
-			},
-		}, nil
+		return execResult("helm", result, limitOutput(result.Stdout, limit), limit), nil
 	}
 }
 

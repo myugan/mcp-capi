@@ -208,10 +208,10 @@ func buildClusterTools(serverCtx *ServerContext) []ToolRegistration {
 			"capi_kubectl",
 			tooldesc.Describe(
 				"Run a kubectl command against a CAPI workload cluster's own API server, resolving that cluster's kubeconfig.",
-				"Cannot target the management cluster, and args cannot override the resolved kubeconfig, context, server or credentials. "+
-					"Impersonate a user with the as parameter, not args, e.g. to test RBAC. There is no local filesystem to read a file "+
-					"from: to apply or create from content, end args in a literal \"-\" (e.g. [\"apply\", \"-f\", \"-\"]) and pass the "+
-					"content as stdin. A failure is an error starting with the exit code and stderr. "+
+				"Cannot target the management cluster; args cannot override the resolved kubeconfig, context, server or credentials. "+
+					"Impersonate with the as parameter, not args (e.g. to test RBAC). No local filesystem: to apply or create from "+
+					"content, end args in a literal \"-\" (e.g. [\"apply\", \"-f\", \"-\"]) and pass it as stdin. A failure is an error "+
+					"led by the exit code and stderr; an exec ending in a grep with no match is not one. "+
 					"get -o yaml or json omits the last-applied-configuration annotation.",
 			),
 			mcp.WithString("namespace", mcp.Required(), mcp.Description("Namespace of the Cluster resource on the management cluster")),

@@ -461,7 +461,7 @@ func CreateKubectlHandler(serverCtx *ServerContext) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultErrorFromErr("kubectl was not run", err), nil
 		}
-		return execResult("kubectl", result, kubectlStdout(args, result.Stdout, limit), limit), nil
+		return kubectlResult(args, result, kubectlStdout(args, result.Stdout, limit), limit), nil
 	}
 }
 

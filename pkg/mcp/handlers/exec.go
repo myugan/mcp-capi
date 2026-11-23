@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -211,31 +212,185 @@ func kubectlStdout(args []string, stdout string, limit int) string {
 	return limitOutput(stdout, limit)
 }
 
+// terminatedByRemote is the line kubectl exec writes to stderr when the
+// command it ran in the container ended with status 1. Without it, a status
+// of 1 is kubectl's own failure (no such pod, forbidden), not the command's.
+const terminatedByRemote = "command terminated with exit code 1"
+
+// grepNoMatchText ends capi_kubectl's answer for a kubectl exec whose command
+// ends in grep and matched nothing. grep says "no line matched" with status 1
+// and no output; reported as a failure, it reads as a broken command and gets
+// retried, when it is the answer.
+const grepNoMatchText = "(the last grep matched no lines: grep's status 1 means no match, not an error)\n"
+
+// kubectlResult renders a finished kubectl run: execResult, except that a
+// grep in the container that matched nothing is an answer, not a failure.
+func kubectlResult(args []string, result *capi.ExecResult, stdout string, limit int) *mcp.CallToolResult {
+	if !grepFoundNothing(args, result) {
+		return execResult("kubectl", result, stdout, limit)
+	}
+	// What the commands before grep printed stays, the kubectl line goes.
+	var kept []string
+	for _, line := range strings.Split(strings.TrimRight(result.Stderr, "\n"), "\n") {
+		if strings.TrimSpace(line) != terminatedByRemote {
+			kept = append(kept, line)
+		}
+	}
+	text := successText(stdout, strings.TrimSpace(strings.Join(kept, "\n")))
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return mcp.NewToolResultText(text + grepNoMatchText)
+}
+
+// grepFoundNothing reports whether a finished kubectl run is a kubectl exec
+// whose command in the container ends in grep, and grep matched no lines:
+// the command ended with status 1 (kubectl's terminatedByRemote line).
+//
+// The command is grep itself, or `sh -c <script>` (bash, ash, dash, zsh)
+// whose last command is a plain pipeline ending in grep; what came before it
+// does not change the status. A script that joins its last command with &&
+// or ||, sets errexit or pipefail, or uses command substitution is not read:
+// any of them can end in status 1 without grep having run, and such a run
+// stays a failure.
+func grepFoundNothing(args []string, result *capi.ExecResult) bool {
+	if result.TimedOut || result.ExitCode != 1 || kubectlVerb(args) != "exec" {
+		return false
+	}
+	terminated := false
+	for _, line := range strings.Split(result.Stderr, "\n") {
+		terminated = terminated || strings.TrimSpace(line) == terminatedByRemote
+	}
+	if !terminated {
+		return false
+	}
+	remote := remoteCommand(args)
+	switch {
+	case len(remote) == 0:
+		return false
+	case isGrep(remote[0]):
+		return true
+	case len(remote) >= 3 && isShell(remote[0]) && remote[1] == "-c":
+		return endsInGrep(remote[2])
+	}
+	return false
+}
+
+// remoteCommand returns the command a kubectl exec runs in the container: the
+// arguments after the first "--".
+func remoteCommand(args []string) []string {
+	for i, arg := range args {
+		if arg == "--" {
+			return args[i+1:]
+		}
+	}
+	return nil
+}
+
+func isGrep(word string) bool {
+	switch path.Base(word) {
+	case "grep", "egrep", "fgrep":
+		return true
+	}
+	return false
+}
+
+func isShell(word string) bool {
+	switch path.Base(word) {
+	case "sh", "bash", "ash", "dash", "zsh":
+		return true
+	}
+	return false
+}
+
+// endsInGrep reports whether a shell script's last command is a pipeline whose
+// last stage is grep, so that the script's status is grep's. Separators inside
+// quotes do not count.
+func endsInGrep(script string) bool {
+	if strings.Contains(script, "pipefail") || strings.Contains(script, "errexit") ||
+		strings.Contains(script, "set -e") || strings.Contains(script, "$(") || strings.Contains(script, "`") {
+		return false
+	}
+	script = strings.TrimRight(script, " \t\r\n;")
+	// stage is where the last pipeline stage starts; joined says the last
+	// command so far has a && or || in it.
+	stage, joined := 0, false
+	var quote byte
+	for i := 0; i < len(script); i++ {
+		c := script[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else if c == '\\' && quote == '"' {
+				i++
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '\\':
+			i++
+		case c == ';' || c == '\n':
+			stage, joined = i+1, false
+		case (c == '&' || c == '|') && i > 0 && (script[i-1] == '>' || script[i-1] == '<'):
+			// A redirection (2>&1, >&2, >|), not a separator.
+		case c == '&' && i+1 < len(script) && script[i+1] == '>':
+			// &>file
+		case (c == '&' || c == '|') && i+1 < len(script) && script[i+1] == c:
+			joined = true
+			i++
+		case c == '|' && i+1 < len(script) && script[i+1] == '&':
+			// |& pipes stderr as well.
+			stage = i + 2
+			i++
+		case c == '&':
+			stage, joined = i+1, false
+		case c == '|':
+			stage = i + 1
+		}
+	}
+	if quote != 0 || joined {
+		return false
+	}
+	words := strings.Fields(script[stage:])
+	// Variable assignments before the command (LC_ALL=C grep ...).
+	for len(words) > 0 && strings.Contains(words[0], "=") && !strings.HasPrefix(words[0], "-") {
+		words = words[1:]
+	}
+	return len(words) > 0 && isGrep(words[0])
+}
+
+// successText is a successful run's output: its stdout, followed by a
+// [stderr] section when the tool warned about something; "" when it printed
+// nothing at all.
+func successText(stdout, stderr string) string {
+	var text strings.Builder
+	text.WriteString(stdout)
+	if stderr != "" {
+		if stdout != "" && !strings.HasSuffix(stdout, "\n") {
+			text.WriteString("\n")
+		}
+		text.WriteString("[stderr]\n")
+		text.WriteString(limitOutput(stderr, stderrLimit))
+		text.WriteString("\n")
+	}
+	return text.String()
+}
+
 // execResult renders a finished kubectl or helm run. stdout is the output
 // already prepared for the caller.
 //
-// A successful run returns its stdout, followed by a [stderr] section when
-// the tool warned about something. A failed run is an error result that
+// A successful run returns successText. A failed run is an error result that
 // starts with how it failed (exit code, or the timeout) and stderr, where the
 // tool says why, followed by whatever it had printed to stdout.
 func execResult(tool string, result *capi.ExecResult, stdout string, limit int) *mcp.CallToolResult {
 	stderr := strings.TrimRight(result.Stderr, "\n")
 
 	if !result.Failed() {
-		var text strings.Builder
-		text.WriteString(stdout)
-		if stderr != "" {
-			if stdout != "" && !strings.HasSuffix(stdout, "\n") {
-				text.WriteString("\n")
-			}
-			text.WriteString("[stderr]\n")
-			text.WriteString(limitOutput(stderr, stderrLimit))
-			text.WriteString("\n")
+		text := successText(stdout, stderr)
+		if text == "" {
+			text = "(no output)\n"
 		}
-		if text.Len() == 0 {
-			text.WriteString("(no output)\n")
-		}
-		return mcp.NewToolResultText(text.String())
+		return mcp.NewToolResultText(text)
 	}
 
 	var text strings.Builder

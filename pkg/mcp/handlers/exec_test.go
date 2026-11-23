@@ -247,6 +247,74 @@ func TestExecResultRendering(t *testing.T) {
 	})
 }
 
+func TestKubectlResultGrepNoMatch(t *testing.T) {
+	terminated := &capi.ExecResult{ExitCode: 1, Stderr: "command terminated with exit code 1\n"}
+	shell := func(script string) []string {
+		return []string{"exec", "tenant-pod", "-n", "hunt", "--", "sh", "-c", script}
+	}
+
+	t.Run("a grep that matched nothing is an answer, not a failure", func(t *testing.T) {
+		for _, args := range [][]string{
+			{"exec", "web-0", "--", "grep", "-i", "kiali", "/etc/hosts"},
+			shell("kubectl auth can-i --list -n hunt-scratch 2>&1 | grep -i kiali"),
+			shell("cat /etc/passwd | grep 'a|b'; "),
+			shell("ps aux |& LC_ALL=C /bin/grep -E 'x;y'"),
+			{"exec", "-n", "hunt", "web-0", "-c", "app", "--", "/bin/bash", "-c", "env | egrep TOKEN"},
+		} {
+			result := kubectlResult(args, terminated, "", 1000)
+			if got := anyResultText(t, result); result.IsError || got != grepNoMatchText {
+				t.Fatalf("%q: got error=%v %q", args, result.IsError, got)
+			}
+		}
+	})
+
+	t.Run("what the commands before grep printed is kept", func(t *testing.T) {
+		run := &capi.ExecResult{ExitCode: 1, Stdout: "kialis.kiali.io found\n",
+			Stderr: "Warning: deprecated\ncommand terminated with exit code 1\n"}
+		result := kubectlResult(shell("kubectl get crd kialis.kiali.io; kubectl get kiali -A | grep prod"), run, run.Stdout, 1000)
+		want := "kialis.kiali.io found\n[stderr]\nWarning: deprecated\n" + grepNoMatchText
+		if got := anyResultText(t, result); result.IsError || got != want {
+			t.Fatalf("got error=%v %q\nwant %q", result.IsError, got, want)
+		}
+	})
+
+	t.Run("status 1 that grep may not have given stays a failure", func(t *testing.T) {
+		for name, args := range map[string][]string{
+			"not exec":              {"get", "pods", "--", "grep"},
+			"last command not grep": shell("grep x /etc/hosts; test -f /nope"),
+			"joined with &&":        shell("test -f /nope && grep x /nope"),
+			"joined with ||":        shell("grep x /a || false"),
+			"errexit":               shell("set -e; false; ps | grep x"),
+			"pipefail":              {"exec", "p", "--", "bash", "-o", "pipefail", "-c", "false | grep x"},
+			"pipefail in script":    shell("set -o pipefail; false | grep x"),
+			"substitution":          shell("grep $(cat /nope) /etc/hosts"),
+			"grep inside quotes":    shell("echo '| grep x' ; false"),
+			"backgrounded grep":     shell("grep x /a & false"),
+			"no shell -c":           {"exec", "p", "--", "sh", "/script.sh"},
+		} {
+			result := kubectlResult(args, terminated, "", 1000)
+			if !result.IsError {
+				t.Fatalf("%s: %q was reported as no match", name, args)
+			}
+		}
+	})
+
+	t.Run("kubectl's own failure is not the command's", func(t *testing.T) {
+		run := &capi.ExecResult{ExitCode: 1, Stderr: "Error from server (NotFound): pods \"web-0\" not found\n"}
+		result := kubectlResult([]string{"exec", "web-0", "--", "grep", "x", "/a"}, run, "", 1000)
+		if got := anyResultText(t, result); !result.IsError || !strings.HasPrefix(got, "kubectl failed with exit code 1\n") {
+			t.Fatalf("got error=%v %q", result.IsError, got)
+		}
+	})
+
+	t.Run("grep's own error (status 2) stays a failure", func(t *testing.T) {
+		run := &capi.ExecResult{ExitCode: 2, Stderr: "grep: /a: No such file or directory\ncommand terminated with exit code 2\n"}
+		if result := kubectlResult([]string{"exec", "web-0", "--", "grep", "x", "/a"}, run, "", 1000); !result.IsError {
+			t.Fatal("status 2 was reported as no match")
+		}
+	})
+}
+
 func TestExecArguments(t *testing.T) {
 	args, opts, limit, err := execArguments(map[string]any{
 		"args": []any{"get", "pods"}, "stdin": "x", "timeout_seconds": float64(300), "max_output_bytes": float64(500),
